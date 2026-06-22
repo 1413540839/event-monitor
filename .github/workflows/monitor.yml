@@ -1,179 +1,33 @@
-# -*- coding: utf-8 -*-
-"""BTC/ETH 事件合约 24h监控 — 生产版 (崩溃自重启 + 日志)"""
-import time, requests, smtplib, base64, logging, sys, traceback
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
-import numpy as np, pandas as pd, pandas_ta_classic as ta
+name: 事件合约监控
 
-# ==================== 配置 ====================
-SYMBOLS = ["BTC-USDT", "ETH-USDT"]
-BAR = "5m"; LIMIT = 200; POLL = 30
-SMTP_USER = "1413540839@qq.com"; SMTP_PASS = "oeegrnacybrrfhdj"
-TO_EMAIL = "1413540839@qq.com"
-LOG_FILE = Path(__file__).parent / "monitor.log"
-# =============================================
+on:
+  schedule:
+    - cron: "0 */4 * * *"
+  workflow_dispatch:
 
-# 日志配置
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ]
-)
-log = logging.getLogger(__name__)
+permissions:
+  contents: write
 
-SEEN = set()
-RESTART_DELAY = 60  # 崩溃后等待60秒重启
-
-def send_qq_alert(coin, direction, rule, detail, price):
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    subject_text = f"[事件合约] {coin} {direction}信号"
-    body_text = f"信号时间: {now_str}\n\n币种: {coin}\n方向: {direction}\n规则: {rule}\n详情: {detail}\n当前价格: ${price:,.2f}\n\n--- 事件合约监控 HC v3 ---"
-    
-    subject_b64 = base64.b64encode(subject_text.encode("utf-8")).decode()
-    body_b64 = base64.b64encode(body_text.encode("utf-8")).decode()
-    
-    msg = f"""From: {SMTP_USER}
-To: {TO_EMAIL}
-Subject: =?utf-8?B?{subject_b64}?=
-MIME-Version: 1.0
-Content-Type: text/plain; charset="utf-8"
-Content-Transfer-Encoding: base64
-
-{body_b64}""".encode("utf-8")
-    
-    try:
-        server = smtplib.SMTP_SSL("smtp.qq.com", 465, timeout=10)
-        server.login(SMTP_USER, SMTP_PASS)
-        server.sendmail(SMTP_USER, [TO_EMAIL], msg)
-        server.quit()
-        log.info(f"邮件已发送: {coin} {direction} [{rule}]")
-        return True
-    except Exception as e:
-        log.error(f"邮件发送失败: {e}")
-        return False
-
-
-def run_monitor():
-    """主监控循环，外层捕获所有异常自动重启"""
-    log.info("=" * 50)
-    log.info("监控启动")
-    log.info(f"币种: {SYMBOLS} 周期: {BAR} 刷新: {POLL}s")
-    
-    print()
-    print("=" * 64)
-    print("  BTC/ETH 事件合约信号监控  (10分钟 | HC v3 | 赢4u 输5u)")
-    print(f"  QQ提醒: {TO_EMAIL}")
-    print(f"  日志: {LOG_FILE}")
-    print("  Ctrl+C 退出")
-    print("=" * 64)
-
-    # 启动测试
-    print("  测试邮件...", end="")
-    if send_qq_alert("BTC", "测试", "SYSTEM", "监控已启动", 0):
-        print("OK")
-    else:
-        print("失败!")
-
-    while True:
-        try:
-            bj = (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%H:%M:%S")
-            print(f"\n  [{bj}]", end="")
-            
-            for sym in SYMBOLS:
-                url = "https://www.okx.com/api/v5/market/candles"
-                r = requests.get(url, params={"instId": sym, "bar": BAR, "limit": LIMIT}, timeout=10)
-                data = r.json()
-                if data["code"] != "0":
-                    print(f"\n    {sym} 接口错误", end=""); continue
-                    
-                rows = [{"ts": int(c[0]), "open": float(c[1]), "high": float(c[2]),
-                          "low": float(c[3]), "close": float(c[4]), "volume": float(c[5])}
-                        for c in reversed(data["data"])]
-                df = pd.DataFrame(rows).astype(float)
-                c, h, l, o, v = df["close"], df["high"], df["low"], df["open"], df["volume"]
-                
-                ema20 = ta.ema(c, 20); ema60 = ta.ema(c, 60)
-                rsi7 = ta.rsi(c, 7); rsi14 = ta.rsi(c, 14)
-                macd = ta.macd(c, 12, 26, 9); macd_hist = macd["MACDh_12_26_9"]
-                
-                lc = c.iloc[-1]; lr7 = rsi7.iloc[-1]; lr14 = rsi14.iloc[-1]
-                le20 = ema20.iloc[-1]; le60 = ema60.iloc[-1]
-                lmh = macd_hist.iloc[-1]; pmh = macd_hist.iloc[-2] if len(macd_hist) >= 2 else 0
-                
-                pos20 = (c - l.rolling(20).min()) / (h.rolling(20).max() - l.rolling(20).min() + 1e-10)
-                lp = pos20.iloc[-1]
-                vol_sma = v.rolling(20).mean()
-                vr = v.iloc[-1] / vol_sma.iloc[-1] if vol_sma.iloc[-1] > 0 else 0
-                
-                rsi_div = 0
-                if len(c) >= 6 and not pd.isna(lr14):
-                    pu = c.iloc[-1] > c.iloc[-6]; ru = lr14 > rsi14.iloc[-6]
-                    if pu and not ru: rsi_div = -1
-                    if not pu and ru: rsi_div = 1
-                
-                trend = "多头" if le20 > le60 else "空头"
-                rsi_s = f"RSI7={lr7:.0f}" if not pd.isna(lr7) else "RSI7=--"
-                candle_id = f"{sym}_{df.index[-1]}"
-                
-                alerts = []
-                if not pd.isna(lr7) and lr7 < 25 and lp < 0.2 and lmh > pmh:
-                    alerts.append(("HC1", "看涨", f"极限超卖反弹 R7={lr7:.0f} 区间低位={lp:.2f}"))
-                if rsi_div == 1 and vr > 1.2 and lp < 0.4:
-                    alerts.append(("HC2", "看涨", f"RSI底背离 量={vr:.1f}倍 区间低={lp:.2f}"))
-                if rsi_div == -1 and vr > 1.2 and lp > 0.6:
-                    alerts.append(("HC4", "看跌", f"RSI顶背离 量={vr:.1f}倍 区间高={lp:.2f}"))
-                
-                body_a = abs(c.iloc[-1]-o.iloc[-1]); total_r = h.iloc[-1]-l.iloc[-1]
-                if total_r > 0:
-                    br = body_a/total_r; lw=(min(c.iloc[-1],o.iloc[-1])-l.iloc[-1])/total_r
-                    up=(h.iloc[-1]-max(c.iloc[-1],o.iloc[-1]))/total_r
-                    hammer=lw>0.6 and br<0.35 and up<0.15; star=up>0.6 and br<0.35 and lw<0.15
-                    be=(c.iloc[-1]>o.iloc[-1] and o.iloc[-2]>c.iloc[-2] and c.iloc[-1]>o.iloc[-2] and o.iloc[-1]<c.iloc[-2]) if len(o)>=2 else False
-                    bere=(c.iloc[-1]<o.iloc[-1] and o.iloc[-2]<c.iloc[-2] and c.iloc[-1]<o.iloc[-2] and o.iloc[-1]>c.iloc[-2]) if len(o)>=2 else False
-                    if (hammer or be) and lp<0.3 and vr>1.3:
-                        alerts.append(("HC3","看涨",f"{'锤子线' if hammer else '看涨吞没'} 量={vr:.1f}倍 支撑位"))
-                    if (star or bere) and lp>0.7 and vr>1.3:
-                        alerts.append(("HC5","看跌",f"{'射击星' if star else '看跌吞没'} 量={vr:.1f}倍 阻力位"))
-                
-                ns = ",".join(rl for rl,_,_ in alerts) if alerts else "观望"
-                coin = "BTC" if "BTC" in sym else "ETH"
-                print(f"\n    {coin:<4} ${lc:>10,.2f}  {trend}  {rsi_s:<8}  量={vr:.1f}倍  区间位={lp:.2f}  [{ns}]", end="")
-                
-                for rl, d, detail in alerts:
-                    aid = f"{candle_id}_{rl}"
-                    if aid not in SEEN:
-                        SEEN.add(aid)
-                        if len(SEEN) > 200: SEEN.clear()
-                        log.info(f"信号: {coin} {d} [{rl}] {detail} @ ${lc:,.2f}")
-                        print(f"\n    发送QQ...", end="")
-                        ok = send_qq_alert(coin, d, rl, detail, lc)
-                        print("OK!" if ok else "失败", end="")
-                        print(f"\n    *** {coin} {d} [{rl}] {detail} ***", end="")
-            
-            print(f"\n  {'-'*56}\n  下次刷新: {POLL}秒后", end="", flush=True)
-            time.sleep(POLL)
-            
-        except KeyboardInterrupt:
-            raise
-        except Exception as e:
-            log.error(f"循环内异常: {traceback.format_exc()}")
-            print(f"\n  出错: {e}, {RESTART_DELAY}秒后重试...")
-            time.sleep(RESTART_DELAY)
-
-
-if __name__ == "__main__":
-    while True:
-        try:
-            run_monitor()
-        except KeyboardInterrupt:
-            log.info("用户停止监控")
-            print("\n\n  监控已停止。")
-            break
-        except Exception as e:
-            log.critical(f"致命错误: {traceback.format_exc()}")
-            print(f"\n  致命错误: {e}")
-            print(f"  {RESTART_DELAY}秒后自动重启...")
-            time.sleep(RESTART_DELAY)
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install requests numpy pandas pandas_ta_classic
+      - name: Configure Git
+        run: |
+          git config user.name "EventMonitor"
+          git config user.email "monitor@bot.com"
+      - name: Run Monitor
+        env:
+          SENDKEY: ${{ secrets.SENDKEY }}
+          TEST_MODE: ${{ secrets.TEST_MODE }}
+        run: python monitor.py
