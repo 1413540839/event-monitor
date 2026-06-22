@@ -1,6 +1,6 @@
 ﻿# -*- coding: utf-8 -*-
-"""BTC/ETH 事件合约 24h监控 — 信号记录 + 结果回看 + Server酱推送"""
-import time, requests, os, logging, sys, traceback, json, subprocess
+"""BTC/ETH 事件合约 24h监控 v2 — 含测试模式"""
+import time, requests, os, logging, sys, traceback, subprocess
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import numpy as np, pandas as pd, pandas_ta_classic as ta
@@ -8,15 +8,14 @@ import numpy as np, pandas as pd, pandas_ta_classic as ta
 SYMBOLS = ["BTC-USDT", "ETH-USDT"]
 BAR = "5m"; LIMIT = 200; POLL = 30
 SENDKEY = os.environ.get("SENDKEY", "SCT368411TN5CPulBnZ7HuuE1GKx6D9bvu")
-TRADE_LOG = Path("trade_log.csv")  # 信号记录
-CONTRACT_CANDLES = 2  # 10分钟合约 = 2根5m K线
+TRADE_LOG = Path("trade_log.csv")
+CONTRACT_CANDLES = 2
+TEST_MODE = os.environ.get("TEST_MODE", "0") == "1"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger(__name__)
 SEEN = set()
-
-# 待回看的信号 (candle_id -> {entry})
-PENDING = {}  # key: (sym, entry_candle_ts) -> {coin, direction, rule, entry_price, ...}
+PENDING = {}
 
 def load_trade_log():
     if TRADE_LOG.exists():
@@ -25,13 +24,12 @@ def load_trade_log():
 
 def save_trade_log(df):
     df.to_csv(TRADE_LOG, index=False, encoding="utf-8")
-    # 提交到Git
     try:
         subprocess.run(["git","add","trade_log.csv"], capture_output=True, timeout=10)
         subprocess.run(["git","commit","-m","update trade log"], capture_output=True, timeout=10)
         subprocess.run(["git","push"], capture_output=True, timeout=30)
-    except:
-        pass
+    except Exception as e:
+        log.error("Git push failed: %s", e)
 
 def push_wechat(title, content):
     try:
@@ -41,89 +39,59 @@ def push_wechat(title, content):
     except:
         return False
 
-def check_pending_trades(df, current_candle_ts, current_price, coin):
-    """检查待回看的交易是否到期"""
+def check_pending_trades(df, current_candle_ts, current_price, sym):
     completed = []
     for key, trade in list(PENDING.items()):
         t_sym, t_entry_ts = key
-        if t_sym != coin: continue
-        
+        if t_sym != sym: continue
         try:
-            # 计算过了多少根K线
-            entry_idx = df.index.get_loc(t_entry_ts)
-            current_idx = df.index.get_loc(current_candle_ts)
-            bars_passed = current_idx - entry_idx
+            bars = df.index.get_loc(current_candle_ts) - df.index.get_loc(t_entry_ts)
         except:
             continue
-        
-        if bars_passed >= CONTRACT_CANDLES:
-            # 合约到期，结算
-            exit_price = current_price
-            if trade["direction"] == "看涨":
-                win = exit_price > trade["entry_price"]
-            else:
-                win = exit_price < trade["entry_price"]
-            
+        if bars >= CONTRACT_CANDLES:
+            win = (current_price > trade["entry_price"]) if trade["direction"] == "看涨" else (current_price < trade["entry_price"])
             pnl = 4 if win else -5
-            result = "赢" if win else "输"
-            
             completed.append((key, {
-                "time": trade["time"],
-                "coin": coin,
-                "direction": trade["direction"],
-                "rule": trade["rule"],
-                "entry_price": trade["entry_price"],
-                "exit_price": exit_price,
-                "pnl": pnl,
-                "result": result,
+                "time": trade["time"], "coin": trade["coin"], "direction": trade["direction"],
+                "rule": trade["rule"], "entry_price": trade["entry_price"],
+                "exit_price": current_price, "pnl": pnl, "result": "赢" if win else "输",
                 "detail": trade["detail"],
             }))
-            
-            # 推送结果
-            emoji = "✅" if win else "❌"
-            push_wechat(
-                f"[结算] {coin} {result} {pnl:+d}u",
-                f"{emoji} {trade['direction']} [{trade['rule']}]\n"
-                f"入场: ${trade['entry_price']:,.2f}\n"
-                f"出场: ${exit_price:,.2f}\n"
-                f"盈亏: {pnl:+d}u\n"
-                f"时间: {trade['time']}"
-            )
-            log.info("结算: %s %s [%s] %s %+du", coin, trade["direction"], trade["rule"], result, pnl)
-    
-    # 移除已完成
+            emoji = "OK" if win else "NO"
+            push_wechat(f"[结算] {trade['coin']} {'赢' if win else '输'} {pnl:+d}u",
+                       f"{emoji} {trade['direction']} [{trade['rule']}]\n入场: ${trade['entry_price']:,.2f}\n出场: ${current_price:,.2f}\n盈亏: {pnl:+d}u")
+            log.info("结算: %s %s [%s] %s %+du", trade["coin"], trade["direction"], trade["rule"], "赢" if win else "输", pnl)
     for key in completed:
         del PENDING[key]
-    
     return [v for _, v in completed]
 
 def main():
-    log.info("监控启动 %s", SYMBOLS)
-    push_wechat("事件合约监控已上线", f"币种: BTC, ETH\n周期: 10分钟\n记录: trade_log.csv\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    log.info("启动 %s TEST=%s", SYMBOLS, TEST_MODE)
+    push_wechat("事件合约监控已上线" + (" [测试模式]" if TEST_MODE else ""),
+               f"币种: BTC, ETH\n周期: 10分钟\n记录: trade_log.csv\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
-    # 加载历史
     trade_df = load_trade_log()
-    total_pnl = trade_df["pnl"].sum() if len(trade_df) > 0 else 0
-    total_trades = len(trade_df)
-    wins = (trade_df["result"] == "赢").sum() if len(trade_df) > 0 else 0
-    log.info("历史: %d笔 胜率%.1f%% 累计%+du", total_trades, wins/total_trades*100 if total_trades else 0, total_pnl)
+    total = len(trade_df)
+    wins_n = (trade_df["result"] == "赢").sum() if total else 0
+    total_pnl = trade_df["pnl"].sum() if total else 0
+    log.info("历史: %d笔 胜率%.1f%% 累计%+du", total, wins_n/total*100 if total else 0, total_pnl)
+    
+    test_sent = False  # 测试模式只触发一次
     
     while True:
         try:
             bj = (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%H:%M:%S")
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print(f"[{bj}]", end=" ", flush=True)
-            
             new_records = []
             
             for sym in SYMBOLS:
                 url = "https://www.okx.com/api/v5/market/candles"
                 r = requests.get(url, params={"instId": sym, "bar": BAR, "limit": LIMIT}, timeout=10)
-                data = r.json()
-                if data["code"] != "0": continue
+                if r.json()["code"] != "0": continue
                 rows = [{"ts": int(c[0]), "open": float(c[1]), "high": float(c[2]),
                           "low": float(c[3]), "close": float(c[4]), "volume": float(c[5])}
-                        for c in reversed(data["data"])]
+                        for c in reversed(r.json()["data"])]
                 df = pd.DataFrame(rows).astype(float)
                 c, h, l, o, v = df["close"], df["high"], df["low"], df["open"], df["volume"]
                 ema20=ta.ema(c,20); ema60=ta.ema(c,60); rsi7=ta.rsi(c,7); rsi14=ta.rsi(c,14)
@@ -141,13 +109,17 @@ def main():
                 candle_ts = df.index[-1]
                 coin="BTC" if "BTC" in sym else "ETH"
                 
-                # 先检查待回看的交易
+                # 检查待回看
                 completed = check_pending_trades(df, candle_ts, lc, sym)
-                for rec in completed:
-                    new_records.append(rec)
+                for rec in completed: new_records.append(rec)
                 
-                # 生成新信号
-                alerts=[]
+                alerts = []
+                
+                # === 测试模式：强制对 ETH 发一个看涨信号（仅一次） ===
+                if TEST_MODE and not test_sent and coin == "ETH":
+                    alerts.append(("TEST","看涨",f"测试信号\nRSI7={lr7:.0f} 区间={lp:.2f}"))
+                    test_sent = True
+                
                 if not pd.isna(lr7) and lr7<25 and lp<0.2 and lmh>pmh:
                     alerts.append(("HC1","看涨",f"极限超卖反弹\nRSI7={lr7:.0f} 区间低位={lp:.2f}"))
                 if rsi_div==1 and vr>1.2 and lp<0.4:
@@ -166,46 +138,38 @@ def main():
                         alerts.append(("HC5","看跌",f"{'射击星' if star else '看跌吞没'}\n量={vr:.1f}倍 阻力位"))
                 
                 ns=",".join(rl for rl,_,_ in alerts) if alerts else "-"
-                status_line = f"{coin}${lc:,.0f} {trend} R7={lr7:.0f} V={vr:.1f}x"
-                if len(PENDING) > 0:
-                    pend_count = sum(1 for k in PENDING if k[0] == sym)
-                    status_line += f" [持仓{pend_count}]"
-                status_line += f" [{ns}]"
-                print(status_line, end="  ", flush=True)
+                status = f"{coin}${lc:,.0f} {trend} R7={lr7:.0f} V={vr:.1f}x"
+                if any(k[0]==sym for k in PENDING): status += f" [持仓{sum(1 for k in PENDING if k[0]==sym)}]"
+                status += f" [{ns}]"
+                print(status, end="  ", flush=True)
                 
                 for rl,d,detail in alerts:
                     cid = f"{sym}_{candle_ts}_{rl}"
                     if cid not in SEEN:
                         SEEN.add(cid)
                         if len(SEEN)>200: SEEN.clear()
-                        
-                        # 记录待回看
-                        PENDING[(sym, candle_ts)] = {
-                            "time": now_str,
-                            "direction": d,
-                            "rule": rl,
-                            "entry_price": lc,
-                            "detail": detail.replace("\n", " "),
-                        }
-                        
+                        PENDING[(sym, candle_ts)] = {"time":now_str,"coin":coin,"direction":d,"rule":rl,"entry_price":lc,"detail":detail.replace("\n"," ")}
                         log.info("开仓: %s %s [%s] @ $%.2f", coin, d, rl, lc)
-                        push_wechat(
-                            f"[开仓] {coin} {d} [{rl}]",
-                            f"币种: {coin}\n方向: {d}\n规则: {rl}\n详情: {detail}\n入场价: ${lc:,.2f}\n时间: {now_str}\n\n10分钟后结算"
-                        )
+                        push_wechat(f"[开仓] {coin} {d} [{rl}]", f"币种: {coin}\n方向: {d}\n规则: {rl}\n详情: {detail}\n入场价: ${lc:,.2f}\n时间: {now_str}\n\n10分钟后结算")
             
-            # 保存新结果
             if new_records:
                 new_df = pd.DataFrame(new_records)
                 trade_df = pd.concat([trade_df, new_df], ignore_index=True)
                 save_trade_log(trade_df)
-                total = len(trade_df)
-                wins_n = (trade_df["result"] == "赢").sum()
-                total_pnl = trade_df["pnl"].sum()
-                print(f"\n  已结算: {len(new_records)}笔 | 累计: {total}笔 {wins_n}赢 胜率{wins_n/total*100:.1f}% PnL{total_pnl:+d}u", end="")
+                total_n = len(trade_df)
+                w = (trade_df["result"]=="赢").sum()
+                pnl = trade_df["pnl"].sum()
+                print(f"\n  结算: {len(new_records)}笔 | 累计: {total_n}笔 {w}赢 胜率{w/total_n*100:.1f}% PnL{pnl:+d}u", end="")
+                if TEST_MODE:
+                    print(" [测试完成!]", end="")
             
             print(f" 下次:{POLL}s")
             time.sleep(POLL)
+            
+            if TEST_MODE and test_sent and len(PENDING) == 0 and len(new_records) == 0:
+                # 等了一轮还没结算？继续等
+                pass
+                
         except Exception as e:
             log.error("异常: %s", traceback.format_exc())
             time.sleep(10)
