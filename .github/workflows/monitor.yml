@@ -6,6 +6,9 @@ on:
     - cron: "0 */4 * * *"
   workflow_dispatch:  # 手动触发
 
+  permissions:
+  contents: write
+
 jobs:
   monitor:
     runs-on: ubuntu-latest
