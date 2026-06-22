@@ -1,0 +1,29 @@
+﻿name: 事件合约监控
+
+on:
+  schedule:
+    # 每4小时触发一次（防止6小时超时被kill后有空窗）
+    - cron: "0 */4 * * *"
+  workflow_dispatch:  # 手动触发
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 最大6小时，然后被下次触发接上
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      
+      - name: Install dependencies
+        run: pip install requests numpy pandas pandas_ta_classic
+      
+      - name: Run Monitor
+        env:
+          QQ_USER: ${{ secrets.QQ_USER }}
+          QQ_PASS: ${{ secrets.QQ_PASS }}
+        run: python monitor.py
