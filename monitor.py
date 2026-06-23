@@ -1,10 +1,8 @@
 # -*- coding: utf-8 -*-
-"""v23 - Skip uptrend signals + FG double bet + REST polling
-   ETH: P20<0.12 RSI7<22 VR20>1.8 Stoch<18 ms=2.0 2x@3+
-   BTC: P20<0.18 RSI7<15 VR20>0.9 Stoch<10 ms=2.0 2x@3+
-   FILTER: skip uptrend (price>EMA200 & EMA20>EMA50)
-   SIZING: FG<25 = 2x bet | Score>=3 = 2x bet
-   Backtest: 18.6/d WR=56.7% +209u/mo"""
+"""v24 - Tiered FG sizing: FG<15=3x FG<25=2x Score>=3=2x + Skip uptrend
+   ETH: P20<0.12 RSI7<22 VR20>1.8 Stoch<18 ms=2.0
+   BTC: P20<0.18 RSI7<15 VR20>0.9 Stoch<10 ms=2.0
+   Backtest: 18.6/d WR=56.7% +269u/mo (200u account, 5u/contract)"""
 import time, json, requests, os, logging, sys, traceback, subprocess
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -26,7 +24,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger(__name__)
 SEEN = set(); PENDING = {}; CONSEC_LOSS = 0; LAST_SIGNAL = {}
 MAX_RUN_MIN = 350
-FG_VALUE = 50  # cached fear & greed, default neutral
+FG_VALUE = 50
 
 def push_wechat(title, content):
     if not SENDKEY: return False
@@ -54,7 +52,6 @@ def save_trade_log(df):
     except: pass
 
 def fetch_fear_greed():
-    """Fetch latest Fear & Greed index"""
     global FG_VALUE
     try:
         r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=10)
@@ -63,6 +60,12 @@ def fetch_fear_greed():
         log.info("Fear&Greed: %d (%s)", FG_VALUE, data.get("value_classification",""))
     except Exception as e:
         log.warning("FG fetch failed: %s", e)
+
+def get_fg_multiplier(fg):
+    """Tiered FG: FG<15=3x, FG<25=2x, else 1x"""
+    if fg < 15: return 3
+    if fg < 25: return 2
+    return 1
 
 def fetch_candles(sym):
     url = "https://www.okx.com/api/v5/market/candles"
@@ -97,17 +100,14 @@ def compute_score(df, params):
     lc = c.iloc[-2]; lr7 = rsi7.iloc[-2]
     lp20 = p20.iloc[-2]; lvr = vr20.iloc[-2]; lsk = stoch_k.iloc[-2]
     if pd.isna(lr7) or pd.isna(lp20): return None
-    # Trend check: uptrend = price > EMA200 AND EMA20 > EMA50
     ema20 = ta.ema(c, 20).iloc[-2]; ema50 = ta.ema(c, 60).iloc[-2]
     ema200 = ta.ema(c, 200).iloc[-2]
     is_uptrend = not pd.isna(ema200) and lc > ema200 and not pd.isna(ema20) and not pd.isna(ema50) and ema20 > ema50
-    
     score = 0.0; p = params
     if lp20 < p["p20"]: score += 1
     if lr7 < p["rsi7"]: score += 1
     if lvr > p["vr20"]: score += 1
     if not pd.isna(lsk) and lsk < p["stoch"]: score += 1
-    
     trend = "UP" if is_uptrend else "DN"
     return {"score": score, "close": lc, "rsi7": lr7, "p20": lp20, "vr": lvr,
             "stoch": lsk if not pd.isna(lsk) else 50, "trend": trend,
@@ -163,11 +163,12 @@ def run():
         log.info("History: %d trades %.1f%% PnL%+d", n, w/n*100, tp)
     
     fetch_fear_greed()
+    fg_m = get_fg_multiplier(FG_VALUE)
     push_wechat(
-        "Monitor v23 Started",
-        f"BTC+ETH 15m\nSkip uptrend + FG double\nFG:{FG_VALUE}\nHistory:{n}t PnL{tp:+d}u\n{datetime.now().strftime('%H:%M')}"
+        "Monitor v24 Started",
+        f"BTC+ETH 15m\nSkip uptrend + Tiered FG\nFG:{FG_VALUE} (FG x{fg_m})\nHistory:{n}t PnL{tp:+d}u\n{datetime.now().strftime('%H:%M')}"
     )
-    log.info("v23 REST polling - %s %s | FG=%d", BAR, SYMBOLS, FG_VALUE)
+    log.info("v24 REST - %s %s | FG=%d mult=%dx", BAR, SYMBOLS, FG_VALUE, fg_m)
     
     dfs = {}
     for sym in SYMBOLS:
@@ -184,7 +185,6 @@ def run():
             if (datetime.now() - start_time).total_seconds() > MAX_RUN_MIN * 60:
                 log.info("Max runtime reached"); break
             
-            # Refresh FG every 60 loops (~30 min)
             fg_loop += 1
             if fg_loop >= 60:
                 fetch_fear_greed()
@@ -213,19 +213,15 @@ def run():
                 
                 cid = f"{sym}_{sc['ts']}"
                 if sc["score"] >= p["min_s"] and cid not in SEEN:
-                    # Skip uptrend signals
                     if sc["is_uptrend"]:
                         log.info("SKIP %s: uptrend (score=%.1f)", coin, sc["score"])
-                        status.append(f"{coin}${sc['close']:,.0f} UP SKIP S{sc['score']:.1f}")
-                        # Still mark as seen to avoid repeated logs
                         SEEN.add(cid)
                         continue
                     
                     rule_str, direction = classify_signal(sc, p)
-                    # Determine multiplier
-                    base_mult = 2 if sc["score"] >= 3 else 1
-                    fg_mult = 2 if FG_VALUE < 25 else 1
-                    total_mult = base_mult * fg_mult
+                    score_mult = 2 if sc["score"] >= 3 else 1
+                    fg_mult = get_fg_multiplier(FG_VALUE)
+                    total_mult = score_mult * fg_mult
                     
                     detail = f"P20={sc['p20']:.3f} R7={sc['rsi7']:.0f} VR={sc['vr']:.2f} SK={sc['stoch']:.0f} FG={FG_VALUE}"
                     SEEN.add(cid)
@@ -239,15 +235,16 @@ def run():
                     }
                     
                     tags = []
-                    if base_mult >= 2: tags.append("2x")
-                    if fg_mult >= 2: tags.append("FG2x")
+                    if score_mult >= 2: tags.append(f"S{score_mult}x")
+                    if fg_mult >= 2: tags.append(f"FG{fg_mult}x")
                     tag_str = " ".join(tags)
-                    log.info("SIGNAL %s %s [%s] @$%.2f mult=%dx FG=%d",
-                            coin, direction, rule_str, sc["close"], total_mult, FG_VALUE)
+                    log.info("SIGNAL %s %s [%s] @$%.2f mult=%dx (S:%dx FG:%dx)",
+                            coin, direction, rule_str, sc["close"], total_mult, score_mult, fg_mult)
                     push_wechat(
                         f"SIGNAL {coin} {direction} [{rule_str}] {tag_str}",
                         f"Coin:{coin}\nRule:{rule_str}\nEntry:${sc['close']:,.2f}\n"
-                        f"{detail}\nBet:{total_mult}x\nScore:{sc['score']:.1f}/4\n"
+                        f"{detail}\nContracts:{total_mult}x (S:{score_mult}x FG:{fg_mult}x)\n"
+                        f"Risk:{total_mult*5}u Win:{total_mult*4}u\n"
                         f"{datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')}"
                     )
                 
@@ -258,7 +255,8 @@ def run():
                         cd_tag = f" CD{int((120-sec_ago)/60)}m"
                 status.append(f"{coin}${sc['close']:,.0f} {sc['trend']} R{sc['rsi7']:.0f} V{sc['vr']:.1f} S{sc['score']:.1f}{cd_tag}")
             
-            print(f"[{bj}] FG:{FG_VALUE} | {' | '.join(status)} | pend:{len(PENDING)} sigs:{len(SEEN)} L{loop}")
+            fg_m = get_fg_multiplier(FG_VALUE)
+            print(f"[{bj}] FG:{FG_VALUE}(x{fg_m}) | {' | '.join(status)} | pend:{len(PENDING)} sigs:{len(SEEN)} L{loop}")
             loop += 1
             time.sleep(POLL_SEC)
         except KeyboardInterrupt: break
