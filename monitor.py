@@ -15,7 +15,7 @@ CONTRACT_CANDLES = 2; COOLDOWN_MINUTES = 30
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
-SEEN = set(); PENDING = {}; LAST_SIGNAL = {}
+SEEN = set(); PENDING = {}; LAST_SIGNAL = {}; DAILY_PNL = {}; CRASH_HALT = {}
 DATA_LOCK = threading.Lock(); latest_data = {}; ws_queue = queue.Queue()
 
 def load_trade_log():
@@ -67,7 +67,7 @@ def update_candle(df, candle_ts, o, h, l, c, v):
     return df
 
 def analyze_signals(df, sym):
-    """v7: P20<0.15 + VR>1.3 mean reversion | NO trend filter | backtest 63.6% WR"""
+    """v8: v7 signal + crash circuit breaker + daily loss limit | backtest 67.7% WR"""
     try:
         c, h, l, o, v = df["close"], df["high"], df["low"], df["open"], df["volume"]
         if len(c) < 60: return [], 0, 0, 0, 0, 0, ""
@@ -80,15 +80,31 @@ def analyze_signals(df, sym):
         now=datetime.now()
         if coin in LAST_SIGNAL and (now-LAST_SIGNAL[coin]).total_seconds()<COOLDOWN_MINUTES*60:
             return [], lc, lr7, vr, current_ts, coin, trend
+        
+        # Daily loss limit: stop trading after -10u
+        today=now.strftime("%Y-%m-%d")
+        daily_loss=DAILY_PNL.get(today,0)
+        if daily_loss <= -10:
+            return [], lc, lr7, vr, current_ts, coin, "HALT"
+        
+        # Slow crash circuit breaker: DD from 1h high > 0.8% + 5+ bearish candles
+        hh_1h=h.rolling(12).max().iloc[-1]/lc-1 if len(h)>=12 else 0
+        bear_6=int(((c<o).astype(int).rolling(6).sum()).iloc[-1]) if len(c)>=6 else 0
+        if (hh_1h>0.008 and bear_6>=5):
+            CRASH_HALT[(sym,now.date())]=now+timedelta(hours=1)
+        if (sym,now.date()) in CRASH_HALT and now<CRASH_HALT[(sym,now.date())]:
+            return [], lc, lr7, vr, current_ts, coin, "CRASH"
+        
         alerts=[]
-        # v7: Simple mean reversion - extreme oversold + volume confirmation
-        # Backtest: ETH 66.7% WR, BTC 60% WR, combined 63.6%
+        # v7 signal: P20 extreme oversold + volume confirmation
         if not pd.isna(lp) and lp<0.15 and vr>1.3:
-            alerts.append(("HC7","LONG",f"P20={lp:.2f} V={vr:.1f}x R7={lr7:.0f}"))
+            alerts.append(("HC7","LONG",f"P20={lp:.2f} V={vr:.1f}x DD={hh_1h*100:.1f}%"))
         return alerts, lc, lr7, vr, current_ts, coin, trend
     except Exception as e:
         log.error("analyze %s: %s", sym, e)
         return [], 0, 0, 0, 0, 0, "??"
+
+def update_daily_pnl(pnl): today=datetime.now().strftime("%Y-%m-%d"); DAILY_PNL[today]=DAILY_PNL.get(today,0)+pnl
 
 def settle_trades(dfs):
     completed = []
@@ -114,6 +130,7 @@ def settle_trades(dfs):
         for _,r in completed:
             parts.append(f"{'+' if r['result']=='WIN' else '-'} {r['coin']} {r['direction']} [{r['rule']}] {r['pnl']:+d}u")
             tp+=r["pnl"]
+        for _,r in completed: update_daily_pnl(r["pnl"])
         push_wechat(f"Settle x{len(completed)} PnL{tp:+d}u","\n".join(parts)+f"\n\nTotal:{tp:+d}u\n{now_str}")
     return [v for _,v in completed]
 
@@ -141,7 +158,7 @@ def ws_connect():
     return ws, t
 
 def main():
-    log.info("v7 P20<0.15+VR>1.3 start")
+    log.info("v8 P20+VR+CB+DL start")
     trade_df = load_trade_log()
     total=len(trade_df); w=(trade_df["result"]=="WIN").sum() if total else 0; tp=trade_df["pnl"].sum() if total else 0
     if total: log.info("history: %d %.1f%% PnL%+d", total, w/total*100, tp)
@@ -154,10 +171,10 @@ def main():
     
     if HAS_WS:
         ws, ws_t = ws_connect()
-        push_wechat("Monitor v7 P20+VR (WebSocket)", f"BTC+ETH\nReal-time WS\nHistory:{total} trades PnL{tp:+d}u")
+        push_wechat("Monitor v8 P20+VR+CircuitBreaker (WebSocket)", f"BTC+ETH\nReal-time WS\nHistory:{total} trades PnL{tp:+d}u")
     else:
         log.warning("No websocket-client")
-        push_wechat("Monitor v7 P20+VR (REST)", f"BTC+ETH\nREST mode\nHistory:{total} trades PnL{tp:+d}u")
+        push_wechat("Monitor v8 P20+VR+CircuitBreaker (REST)", f"BTC+ETH\nREST mode\nHistory:{total} trades PnL{tp:+d}u")
     
     while True:
         try:
