@@ -1,8 +1,8 @@
-name: 事件合约监控
+﻿name: Event Contract Monitor v17
 
 on:
   schedule:
-    - cron: "0 */4 * * *"
+    - cron: "0 */6 * * *"
   workflow_dispatch:
 
 permissions:
@@ -21,13 +21,19 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install dependencies
-        run: pip install requests numpy pandas pandas_ta_classic
+        run: pip install requests numpy pandas pandas_ta_classic websocket-client
       - name: Configure Git
         run: |
-          git config user.name "EventMonitor"
-          git config user.email "monitor@bot.com"
-      - name: Run Monitor
+          git config user.name "EventMonitorBot"
+          git config user.email "bot@event-monitor.dev"
+      - name: Run Monitor v17
         env:
           SENDKEY: ${{ secrets.SENDKEY }}
-          TEST_MODE: ${{ secrets.TEST_MODE }}
         run: python monitor.py
+      - name: Push trade log
+        if: always()
+        run: |
+          git pull --rebase
+          git add trade_log.csv || true
+          git commit -m "auto: trade log update" || true
+          git push || true
