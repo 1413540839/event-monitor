@@ -1,8 +1,8 @@
 ﻿# -*- coding: utf-8 -*-
-"""v14 - closed-candle evaluation + stoch3 filter + asymmetric sizing (v12g base)
+"""v15 - MORE signals: min_s=2.0 cd=60min closed-candle stoch3 2x@3+
    BTC: P20<0.15 RSI7<12 VR20>1.0 Stoch<8 Score>=2.5 (2x@3.0)
    ETH: P20<0.10 RSI7<18 VR20>2.0 Stoch<15 Score>=2.5 (2x@3.0)
-   NEW: closed-candle eval (iloc[-2]), stoch3<15 filter, score4=2x sizing
+   v15: min_s=2.0(2.7x signals) cd=60min closed-candle stoch3 2x@score>=3
    Bad hours: UTC 5,12,14,22 (train/test validated)
    Backtest: closed-candle 490t WR=65.1% PnL=+520u | Walkforward: +177u edge, p=0.000057"""
 import time, json, requests, os, logging, sys, traceback, subprocess, threading, queue
@@ -21,8 +21,8 @@ TRADE_LOG = Path("trade_log.csv")
 CONTRACT_CANDLES = 1
 
 SNIPER = {
-    "ETH-USDT": {"p20": 0.10, "rsi7": 18, "vr20": 2.0, "stoch": 15, "min_s": 2.5, "coin": "ETH"},
-    "BTC-USDT": {"p20": 0.15, "rsi7": 12, "vr20": 1.0, "stoch": 8,  "min_s": 2.5, "coin": "BTC"},
+    "ETH-USDT": {"p20": 0.10, "rsi7": 18, "vr20": 2.0, "stoch": 15, "min_s": 2.0, "coin": "ETH"},
+    "BTC-USDT": {"p20": 0.15, "rsi7": 12, "vr20": 1.0, "stoch": 8,  "min_s": 2.0, "coin": "BTC"},
 }
 
 STOCH3_MAX = 15  # v13: filter weak stochastic bounce signals
@@ -135,7 +135,7 @@ def analyze_signals(df, sym):
             if LAST_RESULT[coin] == "WIN":
                 cd_minutes = 0   # aggressive after win
             else:
-                cd_minutes = 120  # conservative after loss
+                cd_minutes = 60   # more signals
 
         if coin in LAST_SIGNAL:
             elapsed = (now - LAST_SIGNAL[coin]).total_seconds()
@@ -144,7 +144,7 @@ def analyze_signals(df, sym):
 
         alerts = []; ms = p["min_s"]
         if score >= ms:
-            mult = 2 if score >= ms + 0.5 else 1
+            mult = 2 if score >= 3.0 else 1  # 2x @ 3+ conditions
             tag = f"SN{mult}x"
             alerts.append((tag, "LONG", f"Sc={score:.1f} P20={result['lp20']:.2f} R7={lr7:.0f} V={lvr:.1f}x {trend}"))
         return alerts, lc, lr7, lvr, ts, coin, trend
@@ -217,7 +217,7 @@ def ws_connect():
     log.info("WS: %s", SYMBOLS); return ws, t
 
 def main():
-    log.info("v14 - closed-candle evaluation + stoch3 filter + asymmetric sizing (v12g base))")
+    log.info("v15 - MORE signals: min_s=2.0 cd=60min closed-candle stoch3 2x@3+)")
     trade_df = load_trade_log()
     n = len(trade_df); w = (trade_df["result"]=="WIN").sum() if n else 0
     tp = trade_df["pnl"].sum() if n else 0
