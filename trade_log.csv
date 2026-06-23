@@ -1,3 +1,4 @@
 time,coin,direction,rule,entry_price,exit_price,pnl,result,detail
 2026-06-23 05:15:33,ETH,看涨,HC2,1717.43,1711.42,-5,输,RSI底背离 V=1.6x
 2026-06-23 05:17:37,BTC,看涨,HC2,63661.9,63437.9,-5,输,RSI底背离 V=1.2x
+2026-06-23 05:47:38,BTC,看涨,HC1,63369.1,63378.1,4,赢,极限超卖 R7=16 P20=0.01
