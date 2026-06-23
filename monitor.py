@@ -1,8 +1,8 @@
 ﻿# -*- coding: utf-8 -*-
-"""v15 - MORE signals: min_s=2.0 cd=60min closed-candle stoch3 2x@3+
+"""v16 - MAX signals: min_s=2.0 cd=0 closed-candle stoch3 2x@3+
    BTC: P20<0.15 RSI7<12 VR20>1.0 Stoch<8 Score>=2.5 (2x@3.0)
    ETH: P20<0.10 RSI7<18 VR20>2.0 Stoch<15 Score>=2.5 (2x@3.0)
-   v15: min_s=2.0(2.7x signals) cd=60min closed-candle stoch3 2x@score>=3
+   v16: min_s=2.0 cd=0(no cooldown) closed-candle stoch3 2x@3+ 655t WR=63.5%
    Bad hours: UTC 5,12,14,22 (train/test validated)
    Backtest: closed-candle 490t WR=65.1% PnL=+520u | Walkforward: +177u edge, p=0.000057"""
 import time, json, requests, os, logging, sys, traceback, subprocess, threading, queue
@@ -130,12 +130,12 @@ def analyze_signals(df, sym):
         if now.hour in (5, 12, 14, 22): return [], lc, lr7, lvr, ts, coin, "BADHR"
 
         # Adaptive cooldown
-        cd_minutes = 60  # default
+        cd_minutes = 0   # no cooldown
         if coin in LAST_RESULT:
             if LAST_RESULT[coin] == "WIN":
                 cd_minutes = 0   # aggressive after win
             else:
-                cd_minutes = 60   # more signals
+                cd_minutes = 0    # no cooldown max signals
 
         if coin in LAST_SIGNAL:
             elapsed = (now - LAST_SIGNAL[coin]).total_seconds()
@@ -217,7 +217,7 @@ def ws_connect():
     log.info("WS: %s", SYMBOLS); return ws, t
 
 def main():
-    log.info("v15 - MORE signals: min_s=2.0 cd=60min closed-candle stoch3 2x@3+)")
+    log.info("v16 - MAX signals: min_s=2.0 cd=0 closed-candle stoch3 2x@3+)")
     trade_df = load_trade_log()
     n = len(trade_df); w = (trade_df["result"]=="WIN").sum() if n else 0
     tp = trade_df["pnl"].sum() if n else 0

@@ -1,0 +1,37 @@
+﻿{
+  "version": "16",
+  "changes_from_v12g": [
+    "min_score: 2.5 -> 2.0 (accept 2/4 conditions)",
+    "cooldown: 120min -> 0min (no cooldown, max signals)",
+    "closed-candle: iloc[-1] -> iloc[-2] (no mid-candle noise)",
+    "stoch3<15 filter",
+    "scale_2x_at: score>=3.0 -> 2x bet"
+  ],
+  "params": {
+    "ETH-USDT": {"p20": 0.10, "rsi7": 18, "vr20": 2.0, "stoch": 15, "min_score": 2.0},
+    "BTC-USDT": {"p20": 0.15, "rsi7": 12, "vr20": 1.0, "stoch": 8, "min_score": 2.0}
+  },
+  "risk": {
+    "bad_hours_utc": [5, 12, 14, 22],
+    "daily_loss_limit": -10,
+    "cons_loss_pause": 4,
+    "pause_hours": 4,
+    "cooldown": "0 min (disabled for max signals)",
+    "regime_filter": "skip when price >12% above EMA200"
+  },
+  "performance": {
+    "continuous_backtest_3yr": {
+      "trades": 655,
+      "wr": 0.635,
+      "pnl": 627,
+      "dd": -67,
+      "per_day": 0.52,
+      "per_month": 16,
+      "monthly_pnl": 15
+    },
+    "walkforward": "27 windows, +177u edge over v12g, p=0.000057",
+    "permutation_test": "p=0.000057 significant",
+    "look_ahead_bias": "PASS - closed candle, no future leaks",
+    "survivorship": "PASS - 4 bull, 3 bear, 5 sideways quarters"
+  }
+}
