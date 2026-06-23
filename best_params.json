@@ -1,0 +1,13 @@
+{
+  "cooldown": 30,
+  "trend_filter": 1,
+  "hc4_stoch": 18,
+  "hc4_vr": 1.5,
+  "hc4_p20": 0.25,
+  "hc5_bb": 0.08,
+  "hc5_vr": 1.5,
+  "hc5_r7": 28,
+  "hc2_vr": 1.5,
+  "hc2_p20": 0.35,
+  "vol_inc": false
+}
