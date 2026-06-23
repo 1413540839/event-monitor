@@ -1,5 +1,5 @@
 ﻿# -*- coding: utf-8 -*-
-"""v17 - ULTRA: wide thresholds + no bad hours + cd=0 + stoch3 + 2x@3+
+"""v18 - MAX FREQ: wide + noBH + cd=0 + no stoch3 + 2x@3+
    BTC: P20<0.15 RSI7<12 VR20>1.0 Stoch<8 Score>=2.5 (2x@3.0)
    ETH: P20<0.10 RSI7<18 VR20>2.0 Stoch<15 Score>=2.5 (2x@3.0)
    v16: min_s=2.0 cd=0(no cooldown) closed-candle stoch3 2x@3+ 655t WR=63.5%
@@ -99,7 +99,7 @@ def compute_score(df, params):
     le20 = ta.ema(c, 20).iloc[-2]; le60 = ta.ema(c, 60).iloc[-2]
     if pd.isna(lr7): return None
     if not pd.isna(le200) and le200 > 0 and lc > le200 * 1.12: return None
-    if not pd.isna(lst3) and lst3 >= STOCH3_MAX: return None
+    # stoch3 filter disabled for max signals: if not pd.isna(lst3) and lst3 >= STOCH3_MAX: return None
     score = 0.0; p = params
     if lp20 < p["p20"]: score += 1
     if lr7 < p["rsi7"]: score += 1
@@ -217,7 +217,7 @@ def ws_connect():
     log.info("WS: %s", SYMBOLS); return ws, t
 
 def main():
-    log.info("v17 - ULTRA: wide thresholds + no bad hours + cd=0 + stoch3 + 2x@3+)")
+    log.info("v18 - MAX FREQ: wide + noBH + cd=0 + no stoch3 + 2x@3+)")
     trade_df = load_trade_log()
     n = len(trade_df); w = (trade_df["result"]=="WIN").sum() if n else 0
     tp = trade_df["pnl"].sum() if n else 0
