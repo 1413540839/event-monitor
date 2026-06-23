@@ -67,37 +67,24 @@ def update_candle(df, candle_ts, o, h, l, c, v):
     return df
 
 def analyze_signals(df, sym):
-    """v6: HC4(stoch oversold)+HC2(RSI div) LONG only with trend filter"""
+    """v7: P20<0.15 + VR>1.3 mean reversion | NO trend filter | backtest 63.6% WR"""
     try:
         c, h, l, o, v = df["close"], df["high"], df["low"], df["open"], df["volume"]
         if len(c) < 60: return [], 0, 0, 0, 0, 0, ""
-        ema20=ta.ema(c,20); ema60=ta.ema(c,60); rsi7=ta.rsi(c,7); rsi14=ta.rsi(c,14)
-        lc=c.iloc[-1]; lr7=rsi7.iloc[-1]; lr14=rsi14.iloc[-1]
+        ema20=ta.ema(c,20); ema60=ta.ema(c,60); rsi7=ta.rsi(c,7)
+        lc=c.iloc[-1]; lr7=rsi7.iloc[-1]
         pos20=(c-l.rolling(20).min())/(h.rolling(20).max()-l.rolling(20).min()+1e-10); lp=pos20.iloc[-1]
         vol_sma=v.rolling(20).mean(); vr=v.iloc[-1]/vol_sma.iloc[-1] if vol_sma.iloc[-1]>0 else 0
-        # RSI divergence
-        rsi_div=0
-        if len(c)>=6 and not pd.isna(lr14):
-            pu=c.iloc[-1]>c.iloc[-6]; ru=lr14>rsi14.iloc[-6]
-            if pu and not ru: rsi_div=-1
-            if not pu and ru: rsi_div=1
-        # Stochastic for HC4
-        stoch=ta.stoch(h,l,c,14,3,3); stoch_k=stoch["STOCHk_14_3_3"].iloc[-1]
         trend="UP" if ema20.iloc[-1]>ema60.iloc[-1] else "DN"
         current_ts=int(df.index[-1]); coin="BTC" if "BTC" in sym else "ETH"
         now=datetime.now()
         if coin in LAST_SIGNAL and (now-LAST_SIGNAL[coin]).total_seconds()<COOLDOWN_MINUTES*60:
             return [], lc, lr7, vr, current_ts, coin, trend
         alerts=[]
-        # Trend filter: only LONG in uptrend
-        if trend != "UP":
-            return alerts, lc, lr7, vr, current_ts, coin, trend
-        # === HC4: 随机指标超卖反弹 (主力策略, 回测68.8%胜率) ===
-        if not pd.isna(stoch_k) and stoch_k<18 and vr>1.5 and lp<0.25:
-            alerts.append(("HC4","LONG",f"StochK={stoch_k:.0f} V={vr:.1f}x"))
-        # HC2: RSI bullish divergence (backtest 75% WR)
-        if rsi_div==1 and vr>1.5 and lp<0.35:
-            alerts.append(("HC2","LONG",f"RSI-Div V={vr:.1f}x"))
+        # v7: Simple mean reversion - extreme oversold + volume confirmation
+        # Backtest: ETH 66.7% WR, BTC 60% WR, combined 63.6%
+        if not pd.isna(lp) and lp<0.15 and vr>1.3:
+            alerts.append(("HC7","LONG",f"P20={lp:.2f} V={vr:.1f}x R7={lr7:.0f}"))
         return alerts, lc, lr7, vr, current_ts, coin, trend
     except Exception as e:
         log.error("analyze %s: %s", sym, e)
@@ -154,7 +141,7 @@ def ws_connect():
     return ws, t
 
 def main():
-    log.info("v6 HC4+HC2 TREND start")
+    log.info("v7 P20<0.15+VR>1.3 start")
     trade_df = load_trade_log()
     total=len(trade_df); w=(trade_df["result"]=="WIN").sum() if total else 0; tp=trade_df["pnl"].sum() if total else 0
     if total: log.info("history: %d %.1f%% PnL%+d", total, w/total*100, tp)
@@ -167,10 +154,10 @@ def main():
     
     if HAS_WS:
         ws, ws_t = ws_connect()
-        push_wechat("Monitor v6 HC4+HC2 (WebSocket)", f"BTC+ETH\nReal-time WS\nHistory:{total} trades PnL{tp:+d}u")
+        push_wechat("Monitor v7 P20+VR (WebSocket)", f"BTC+ETH\nReal-time WS\nHistory:{total} trades PnL{tp:+d}u")
     else:
         log.warning("No websocket-client")
-        push_wechat("Monitor v6 HC4+HC2 (REST)", f"BTC+ETH\nREST mode\nHistory:{total} trades PnL{tp:+d}u")
+        push_wechat("Monitor v7 P20+VR (REST)", f"BTC+ETH\nREST mode\nHistory:{total} trades PnL{tp:+d}u")
     
     while True:
         try:
