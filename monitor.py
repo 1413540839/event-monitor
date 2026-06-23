@@ -1,41 +1,41 @@
-﻿# -*- coding: utf-8 -*-
-"""v21 - 10MIN: +25% wider params + ms=2.0 + cd=0 + 15m bars (24.1/d WR=55.7% +50u/mo)
-   BTC: P20<0.18 RSI7<15 VR20>0.9 Stoch<10 Score>=2.0 (2x@3.0)
-   ETH: P20<0.12 RSI7<22 VR20>1.8 Stoch<18 Score>=2.0 (2x@3.0)
-   v16: min_s=2.0 cd=0(no cooldown) closed-candle stoch3 2x@3+ 655t WR=63.5%
-   Bad hours: UTC 5,12,14,22 (train/test validated)
-   Backtest: closed-candle 490t WR=65.1% PnL=+520u | Walkforward: +177u edge, p=0.000057"""
-import time, json, requests, os, logging, sys, traceback, subprocess, threading, queue
+# -*- coding: utf-8 -*-
+"""v22 - REST polling monitor, WebSocket-free, GitHub Actions stable
+   v21 params +25% wider: 24.1/d WR=55.7% +50u/mo"""
+import time, json, requests, os, logging, sys, traceback, subprocess
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-import numpy as np, pandas as pd
+import pandas as pd
 try: import pandas_ta_classic as ta
 except: import pandas_ta as ta
-try: import websocket; HAS_WS = True
-except ImportError: HAS_WS = False
 
 SYMBOLS = ["ETH-USDT", "BTC-USDT"]
-BAR = "15m"; LIMIT = 200
+BAR = "15m"; LIMIT = 200; POLL_SEC = 30
 SENDKEY = os.environ.get("SENDKEY", "")
 TRADE_LOG = Path("trade_log.csv")
-CONTRACT_CANDLES = 1
 
 SNIPER = {
     "ETH-USDT": {"p20": 0.12, "rsi7": 22, "vr20": 1.8, "stoch": 18, "min_s": 2.0, "coin": "ETH"},
     "BTC-USDT": {"p20": 0.18, "rsi7": 15, "vr20": 0.9, "stoch": 10, "min_s": 2.0, "coin": "BTC"},
 }
 
-STOCH3_MAX = 15  # v13: filter weak stochastic bounce signals
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
-SEEN = set(); PENDING = {}; DAILY_PNL = {}; CRASH_HALT = {}; CONSEC_LOSS = 0
-LAST_SIGNAL = {}; LAST_RESULT = {}
-LAST_EVAL_TS = {}  # track last evaluated candle ts per symbol  # track per-coin last signal time and result
-DATA_LOCK = threading.Lock(); latest_data = {}; ws_queue = queue.Queue()
+SEEN = set(); PENDING = {}; CONSEC_LOSS = 0; LAST_SIGNAL = {}
+MAX_RUN_MIN = 350
+
+def push_wechat(title, content):
+    if not SENDKEY: return False
+    try:
+        r = requests.post(f"https://sctapi.ftqq.com/{SENDKEY}.send",
+                         data={"title": title, "desp": content}, timeout=10)
+        return r.status_code == 200
+    except Exception as e:
+        log.error("WeChat push failed: %s", e)
+        return False
 
 def load_trade_log():
-    if TRADE_LOG.exists(): return pd.read_csv(TRADE_LOG)
+    if TRADE_LOG.exists():
+        return pd.read_csv(TRADE_LOG)
     return pd.DataFrame(columns=["time","coin","direction","rule","entry_price","exit_price","pnl","result","detail"])
 
 def save_trade_log(df):
@@ -48,240 +48,172 @@ def save_trade_log(df):
             subprocess.run(["git","push"], capture_output=True, text=True, timeout=30)
     except: pass
 
-def push_wechat(title, content):
-    if not SENDKEY: return False
-    try:
-        r = requests.post(f"https://sctapi.ftqq.com/{SENDKEY}.send", data={"title": title, "desp": content}, timeout=5)
-        return r.status_code == 200
-    except: return False
-
-def fetch_initial(sym):
+def fetch_candles(sym):
     url = "https://www.okx.com/api/v5/market/candles"
-    r = requests.get(url, params={"instId": sym, "bar": BAR, "limit": LIMIT}, timeout=10)
-    if r.json()["code"] != "0": return None
-    rows = [{"ts": int(c[0]), "open": float(c[1]), "high": float(c[2]),
-              "low": float(c[3]), "close": float(c[4]), "volume": float(c[5])}
-            for c in reversed(r.json()["data"])]
-    return rows
+    try:
+        r = requests.get(url, params={"instId": sym, "bar": BAR, "limit": LIMIT}, timeout=15)
+        if r.json()["code"] != "0":
+            log.warning("API error for %s: %s", sym, r.json().get("msg",""))
+            return None
+        rows = [{"ts": int(c[0]), "open": float(c[1]), "high": float(c[2]),
+                  "low": float(c[3]), "close": float(c[4]), "volume": float(c[5])}
+                for c in reversed(r.json()["data"])]
+        return rows
+    except Exception as e:
+        log.error("Fetch failed %s: %s", sym, e)
+        return None
 
 def build_df(rows):
-    df = pd.DataFrame(rows).astype(float)
+    df = pd.DataFrame(rows)
+    for col in ["open","high","low","close","volume","ts"]:
+        df[col] = pd.to_numeric(df[col])
     df.index = df["ts"].astype(int)
     return df.sort_index()
-
-def update_candle(df, candle_ts, o, h, l, c, v):
-    if candle_ts in df.index:
-        df.loc[candle_ts, "open"] = o; df.loc[candle_ts, "high"] = h
-        df.loc[candle_ts, "low"] = l; df.loc[candle_ts, "close"] = c
-        df.loc[candle_ts, "volume"] = v
-    elif candle_ts > df.index[-1]:
-        df.loc[candle_ts] = [o, h, l, c, v]
-        df = df.sort_index()
-        if len(df) > LIMIT: df = df.iloc[-LIMIT:]
-    return df
 
 def compute_score(df, params):
     c, h, l, v = df["close"], df["high"], df["low"], df["volume"]
     if len(c) < 80: return None
-    rsi7 = ta.rsi(c, 7); rsi14 = ta.rsi(c, 14)
+    rsi7 = ta.rsi(c, 7)
     p20 = (c - l.rolling(20).min()) / (h.rolling(20).max() - l.rolling(20).min() + 1e-10)
     vr20 = v / v.rolling(20).mean()
     l14, h14 = l.rolling(14).min(), h.rolling(14).max()
     stoch_k = 100 * (c - l14) / (h14 - l14 + 1e-10)
-    ret5 = c.pct_change(5); ema200 = ta.ema(c, 200)
-    l3, h3 = l.rolling(3).min(), h.rolling(3).max()
-    stoch3 = 100 * (c - l3) / (h3 - l3 + 1e-10)
-    # Use PREVIOUS closed candle (iloc[-2]) to avoid mid-candle noise
-    lc = c.iloc[-2]; lr7 = rsi7.iloc[-2]; lr14 = rsi14.iloc[-2]
+    lc = c.iloc[-2]; lr7 = rsi7.iloc[-2]
     lp20 = p20.iloc[-2]; lvr = vr20.iloc[-2]; lsk = stoch_k.iloc[-2]
-    lst3 = stoch3.iloc[-2]
-    lr5 = ret5.iloc[-2]; le200 = ema200.iloc[-2]
-    le20 = ta.ema(c, 20).iloc[-2]; le60 = ta.ema(c, 60).iloc[-2]
-    if pd.isna(lr7): return None
-    # regime filter disabled: if not pd.isna(le200) and le200 > 0 and lc > le200 * 1.12: return None
-    # stoch3 filter disabled for max signals: if not pd.isna(lst3) and lst3 >= STOCH3_MAX: return None
+    if pd.isna(lr7) or pd.isna(lp20): return None
     score = 0.0; p = params
     if lp20 < p["p20"]: score += 1
     if lr7 < p["rsi7"]: score += 1
-    if not pd.isna(lr14) and lr14 < p["rsi7"] + 5: score += 0.5
     if lvr > p["vr20"]: score += 1
     if not pd.isna(lsk) and lsk < p["stoch"]: score += 1
-    if not pd.isna(lr5) and lr5 < -0.03: score += 1
-    trend = "UP" if le20 > le60 else "DN"
-    return {"score": score, "lc": lc, "lr7": lr7, "lvr": lvr,
-            "lp20": lp20, "lsk": lsk, "trend": trend, "ts": int(df.index[-1])}
+    ema20 = ta.ema(c, 20).iloc[-2]; ema60 = ta.ema(c, 60).iloc[-2]
+    trend = "BULL" if not pd.isna(ema20) and not pd.isna(ema60) and ema20 > ema60 else "BEAR"
+    return {"score": score, "close": lc, "rsi7": lr7, "p20": lp20, "vr": lvr,
+            "stoch": lsk if not pd.isna(lsk) else 50, "trend": trend,
+            "ema20": ema20, "ema60": ema60, "ts": df.index[-2]}
 
-def analyze_signals(df, sym):
-    global LAST_EVAL_TS
-    if df is None or len(df) < 2: return [], 0, 0, 0, 0, 0, "NODATA"
-    candle_ts = int(df.index[-2])  # closed candle ts
-    if sym in LAST_EVAL_TS and LAST_EVAL_TS[sym] == candle_ts:
-        return [], 0, 0, 0, 0, 0, "DUP"  # already evaluated this candle
-    try:
-        p = SNIPER[sym]; coin = p["coin"]
-        result = compute_score(df, p)
-        if result is None: return [], 0, 0, 0, 0, 0, "NODATA"
-        score = result["score"]; lc = result["lc"]; lr7 = result["lr7"]; lst3 = result.get("stoch3", 0); lst3 = result.get("stoch3", 0)
-        lvr = result["lvr"]; ts = result["ts"]; trend = result["trend"]
-        now = datetime.now(); today = now.strftime("%Y-%m-%d")
-        if DAILY_PNL.get(today, 0) <= -30: return [], lc, lr7, lvr, ts, coin, "HALT"
-        if CONSEC_LOSS >= 7 and CRASH_HALT.get("pause") and now < CRASH_HALT["pause"]:
-            return [], lc, lr7, lvr, ts, coin, "PAUSE"
-        # bad hours disabled for max signals
+def classify_signal(sc, params):
+    p = params; rules = []
+    if sc["p20"] < p["p20"]: rules.append("PP")
+    if sc["rsi7"] < p["rsi7"]: rules.append("RSI")
+    if sc["vr"] > p["vr20"]: rules.append("VR")
+    if sc["stoch"] < p["stoch"]: rules.append("SK")
+    rule_str = "+".join(rules)
+    direction = "LONG"
+    return rule_str, direction
 
-        # Adaptive cooldown
-        cd_minutes = 0   # no cooldown
-        if coin in LAST_RESULT:
-            if LAST_RESULT[coin] == "WIN":
-                cd_minutes = 0   # aggressive after win
-            else:
-                cd_minutes = 0    # no cooldown max signals
-
-        if coin in LAST_SIGNAL:
-            elapsed = (now - LAST_SIGNAL[coin]).total_seconds()
-            if elapsed < cd_minutes * 60:
-                return [], lc, lr7, lvr, ts, coin, "CD"
-
-        alerts = []; ms = p["min_s"]
-        if score >= ms:
-            mult = 2 if score >= 3.0 else 1  # 2x @ 3+ conditions
-            tag = f"SN{mult}x"
-            alerts.append((tag, "LONG", f"Sc={score:.1f} P20={result['lp20']:.2f} R7={lr7:.0f} V={lvr:.1f}x {trend}"))
-        return alerts, lc, lr7, lvr, ts, coin, trend
-    except Exception as e:
-        log.error("analyze %s: %s", sym, e)
-        return [], 0, 0, 0, 0, 0, "??"
-
-def update_daily_pnl(pnl):
-    today = datetime.now().strftime("%Y-%m-%d")
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    if yesterday in DAILY_PNL: del DAILY_PNL[yesterday]
-    DAILY_PNL[today] = DAILY_PNL.get(today, 0) + pnl
-
-def settle_trades(dfs):
-    global CONSEC_LOSS
-    if not PENDING: return []
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    completed = []; to_remove = []
-    current_ts = {}
-    for sym, df in dfs.items():
-        if df is not None and len(df) > 0: current_ts[sym] = int(df.index[-1])
-    for (sym, entry_ts), rec in list(PENDING.items()):
-        if sym not in current_ts: continue
-        candles_passed = int((current_ts[sym] - entry_ts) / 3600000)
-        if candles_passed < CONTRACT_CANDLES: continue
-        df = dfs[sym]; entry_price = rec["entry_price"]
-        try: exit_idx = df.index.get_loc(entry_ts) + CONTRACT_CANDLES
-        except: to_remove.append((sym, entry_ts)); continue
-        if exit_idx >= len(df): exit_price = df.iloc[-1]["close"]
-        else: exit_price = df.iloc[exit_idx]["close"]
-        bet = 2 if "2x" in rec.get("rule", "") else 1
-        if exit_price > entry_price: pnl = 4 * bet; result = "WIN"
-        else: pnl = -5 * bet; result = "LOSE"
-        completed.append({"time": now_str, "coin": rec["coin"], "direction": rec["direction"],
-            "rule": rec["rule"], "entry_price": entry_price, "exit_price": exit_price,
-            "pnl": pnl, "result": result, "detail": rec.get("detail", "")})
-        # Update adaptive cooldown state
-        LAST_RESULT[rec["coin"]] = result
+def check_settlements(dfs_current):
+    results = []; to_remove = []
+    for (sym, entry_ts), trade in list(PENDING.items()):
+        if sym not in dfs_current: continue
+        df = dfs_current[sym]
+        if len(df) < 2: continue
+        latest_closed_ts = df.index[-2]
+        if latest_closed_ts <= entry_ts: continue
+        exit_price = float(df["close"].loc[df.index[df.index <= latest_closed_ts].max()])
+        entry_price = float(trade["entry_price"])
+        is_win = exit_price > entry_price
+        multiplier = 2 if trade.get("score", 0) >= 3 else 1
+        pnl = 4 * multiplier if is_win else -5 * multiplier
+        result = "WIN" if is_win else "LOSS"
+        results.append({
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "coin": trade["coin"], "direction": trade["direction"],
+            "rule": trade["rule"], "entry_price": entry_price,
+            "exit_price": exit_price, "pnl": pnl,
+            "result": result, "detail": trade.get("detail","")
+        })
         to_remove.append((sym, entry_ts))
+        global CONSEC_LOSS
+        if not is_win: CONSEC_LOSS += 1
+        else: CONSEC_LOSS = 0
+        emoji = "[WIN]" if is_win else "[LOSS]"
+        push_wechat(
+            f"{emoji} {trade['coin']} {result} {pnl:+d}u [{trade['rule']}]",
+            f"Coin:{trade['coin']}\nRule:{trade['rule']}\nEntry:${entry_price:,.2f}\nExit:${exit_price:,.2f}\nPnL:{pnl:+d}u\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
     for k in to_remove: del PENDING[k]
-    if completed:
-        parts = []; tp = 0
-        for r in completed:
-            parts.append(f"{r['coin']} {r['rule']} {r['entry_price']:.2f}->{r['exit_price']:.2f} {r['pnl']:+d}u")
-            tp += r["pnl"]; update_daily_pnl(r["pnl"])
-            if r["result"] == "WIN": CONSEC_LOSS = 0
-            else: CONSEC_LOSS += 1
-        if CONSEC_LOSS >= 4: CRASH_HALT["pause"] = datetime.now() + timedelta(hours=2)
-        push_wechat(f"\u7ed3\u7b97 {len(completed)}\u7b14 PnL{tp:+d}u",
-                   "\n".join(parts) + f"\n\n\u603b:{tp:+d}u\n{now_str}")
-    return completed
+    return results
 
-def on_message(ws, message):
-    try:
-        data = json.loads(message)
-        if "data" not in data or not data["data"]: return
-        for c in data["data"]:
-            ws_queue.put((data["arg"]["instId"], int(c[0]), float(c[1]), float(c[2]), float(c[3]), float(c[4]), float(c[5])))
-    except: pass
-
-def on_error(ws, error): log.error("WS: %s", error)
-def on_close(ws, st, msg): log.warning("WS closed: %s %s", st, msg)
-
-def ws_connect():
-    ws = websocket.WebSocketApp("wss://ws.okx.com:8443/ws/v5/business",
-        on_message=on_message, on_error=on_error, on_close=on_close)
-    t = threading.Thread(target=lambda: ws.run_forever(), daemon=True); t.start()
-    time.sleep(1)
-    ws.send(json.dumps({"op": "subscribe", "args": [{"channel": "candle1H", "instId": s} for s in SYMBOLS]}))
-    log.info("WS: %s", SYMBOLS); return ws, t
-
-def main():
-    log.info("v20 - 10MIN: v12g params + ms=2.0 + cd=0 + 15m bars)")
+def run():
+    start_time = datetime.now()
     trade_df = load_trade_log()
-    n = len(trade_df); w = (trade_df["result"]=="WIN").sum() if n else 0
-    tp = trade_df["pnl"].sum() if n else 0
-    if n: log.info("history: %d %.1f%% PnL%+d", n, w/n*100, tp)
+    n = len(trade_df); tp = trade_df["pnl"].sum() if n else 0
+    if n:
+        w = (trade_df["result"] == "WIN").sum()
+        log.info("History: %d trades %.1f%% PnL%+d", n, w/n*100, tp)
+    
+    push_wechat(
+        "Monitor v22 Started",
+        f"BTC+ETH 15m\n+25% params\nHistory:{n}t PnL{tp:+d}u\n{datetime.now().strftime('%H:%M')}"
+    )
+    log.info("v22 REST polling - %s %s", BAR, SYMBOLS)
+    
+    dfs = {}
     for sym in SYMBOLS:
-        rows = fetch_initial(sym)
-        if rows:
-            with DATA_LOCK: latest_data[sym] = build_df(rows)
-            log.info("%s: %d candles", sym, len(latest_data[sym]))
-    if HAS_WS:
-        ws, wt = ws_connect()
-        push_wechat("v12g SNIPER \u542f\u52a8", f"BTC+ETH 1H\n\u81ea\u9002\u5e94\u51b7\u5374\u671f\n\u8bad\u7ec3/\u6d4b\u8bd5\u9a8c\u8bc1\u5dee\u65f6\u6bb5\n\u56de\u6d4b7\u6708:245\u7b14 66.1% +484u\n\u5386\u53f2:{n}\u7b14 PnL{tp:+d}u")
-    else:
-        log.warning("No WS"); push_wechat("v12g SNIPER(REST)", f"REST mode\n\u5386\u53f2:{n}\u7b14 PnL{tp:+d}u")
+        rows = fetch_candles(sym)
+        if rows: dfs[sym] = build_df(rows)
+        else: log.error("No data for %s", sym)
+    
+    if not dfs:
+        log.critical("No data loaded"); return
+    
+    loop = 0
     while True:
         try:
-            bj = (datetime.now(timezone.utc)+timedelta(hours=8)).strftime("%H:%M:%S")
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S"); processed = 0
-            while not ws_queue.empty():
-                try:
-                    sid, ts, o, h, l, c, v = ws_queue.get_nowait()
-                    with DATA_LOCK:
-                        if sid in latest_data: latest_data[sid] = update_candle(latest_data[sid], ts, o, h, l, c, v)
-                    processed += 1
-                except: pass
-            with DATA_LOCK: dfs = {k: v.copy() for k, v in latest_data.items()}
-            new_recs = settle_trades(dfs)
+            if (datetime.now() - start_time).total_seconds() > MAX_RUN_MIN * 60:
+                log.info("Max runtime reached"); break
+            
             for sym in SYMBOLS:
-                if sym not in dfs: continue
-                alerts, lc, lr7, lvr, ts, coin, trend = analyze_signals(dfs[sym], sym)
-                ns = ",".join(rl for rl,_,_ in alerts) if alerts else "-"
-                cd_tag = ""
-                if coin in LAST_SIGNAL:
-                    cd_min = 0 if LAST_RESULT.get(coin)=="WIN" else 120
-                    rem = cd_min*60 - (datetime.now()-LAST_SIGNAL[coin]).total_seconds()
-                    if rem > 0: cd_tag = f" CD{int(rem/60)}m"
-                print(f"[{bj}] {coin}${lc:,.0f} {trend} R={lr7:.0f} V={lvr:.1f}x{cd_tag} [{ns}]", end="  ", flush=True)
-                for rl, d, detail in alerts:
-                    cid = f"{sym}_{ts}_{rl}"
-                    if cid not in SEEN:
-                        SEEN.add(cid)
-                        if len(SEEN) > 500: SEEN.clear()
-                        LAST_SIGNAL[coin] = datetime.now(); LAST_EVAL_TS[sym] = candle_ts
-                        PENDING[(sym, ts)] = {"time": now_str, "coin": coin,
-                            "direction": d, "rule": rl, "entry_price": lc, "detail": detail}
-                        lat = (datetime.now(timezone.utc)-pd.Timestamp(ts,unit="ms").tz_localize("UTC")).total_seconds()
-                        log.info("SIG: %s %s [%s] @$%.2f lat=%.1fs", coin, d, rl, lc, lat)
-                        push_wechat(f"\u4fe1\u53f7 {coin} {d} [{rl}]",
-                                   f"\u54c1\u79cd:{coin}\n\u89c4\u5219:{rl}\n\u5165\u573a:${lc:,.2f}\n\u8be6\u60c5:{detail}\n\u5ef6\u8fdf:{lat:.1f}s\n{now_str}")
+                rows = fetch_candles(sym)
+                if rows: dfs[sym] = build_df(rows)
+            
+            new_recs = check_settlements(dfs)
             if new_recs:
                 ndf = pd.DataFrame(new_recs)
                 trade_df = pd.concat([trade_df, ndf], ignore_index=True)
                 save_trade_log(trade_df)
-                tn = len(trade_df); tw = (trade_df["result"]=="WIN").sum(); tpn = trade_df["pnl"].sum()
-                print(f"\n \u7ed3\u7b97{len(new_recs)} \u603b{tn} \u80dc{tw} {tw/tn*100:.1f}% PnL{tpn:+d}u", end="")
-            print(f" ws:{processed}")
-            time.sleep(0.3)
+                tn = len(trade_df); tw = (trade_df["result"] == "WIN").sum()
+                tp = trade_df["pnl"].sum()
+                log.info("Settled:%d Total:%d W:%d %.1f%% PnL:%+d", len(new_recs), tn, tw, tw/tn*100 if tn else 0, tp)
+            
+            bj = (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%H:%M:%S")
+            status = []
+            for sym in SYMBOLS:
+                if sym not in dfs or len(dfs[sym]) < 80: continue
+                sc = compute_score(dfs[sym], SNIPER[sym])
+                if sc is None: continue
+                coin = SNIPER[sym]["coin"]; p = SNIPER[sym]
+                
+                cid = f"{sym}_{sc['ts']}"
+                if sc["score"] >= p["min_s"] and cid not in SEEN:
+                    rule_str, direction = classify_signal(sc, p)
+                    detail = f"P20={sc['p20']:.3f} R7={sc['rsi7']:.0f} VR={sc['vr']:.2f} SK={sc['stoch']:.0f}"
+                    SEEN.add(cid)
+                    if len(SEEN) > 1000: SEEN.clear()
+                    LAST_SIGNAL[coin] = datetime.now()
+                    PENDING[(sym, sc["ts"])] = {
+                        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "coin": coin, "direction": direction, "rule": rule_str,
+                        "entry_price": sc["close"], "detail": detail, "score": sc["score"]
+                    }
+                    log.info("SIGNAL %s %s [%s] @$%.2f", coin, direction, rule_str, sc["close"])
+                    push_wechat(
+                        f"SIGNAL {coin} {direction} [{rule_str}]",
+                        f"Coin:{coin}\nRule:{rule_str}\nEntry:${sc['close']:,.2f}\n{detail}\nScore:{sc['score']:.1f}/4"
+                    )
+                
+                status.append(f"{coin}${sc['close']:,.0f} R{sc['rsi7']:.0f} V{sc['vr']:.1f} S{sc['score']:.1f}")
+            
+            print(f"[{bj}] {' | '.join(status)} | pend:{len(PENDING)} sig:{len(SEEN)} L{loop}")
+            loop += 1
+            time.sleep(POLL_SEC)
+        except KeyboardInterrupt: break
         except Exception as e:
-            log.error("loop: %s", traceback.format_exc()); time.sleep(2)
+            log.error("Loop: %s", traceback.format_exc())
+            time.sleep(15)
+    
+    log.info("Stopped. %.0f min", (datetime.now()-start_time).total_seconds()/60)
 
 if __name__ == "__main__":
-    main()
-
-
-
-
-
+    run()
