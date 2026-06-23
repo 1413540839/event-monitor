@@ -1,0 +1,39 @@
+name: Perpetual Futures Monitor v1
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install requests numpy pandas pandas_ta_classic
+      - name: Configure Git
+        run: |
+          git config user.name "PerpMonitorBot"
+          git config user.email "bot@perp-monitor.dev"
+      - name: Run Perp Monitor v1
+        env:
+          SENDKEY: ${{ secrets.SENDKEY }}
+        run: python perp_monitor.py
+      - name: Push trade log
+        if: always()
+        run: |
+          git pull --rebase || true
+          git add perp_trades.csv || true
+          git commit -m "auto: perp trade log update" || true
+          git push || true
