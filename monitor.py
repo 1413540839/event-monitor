@@ -67,7 +67,7 @@ def update_candle(df, candle_ts, o, h, l, c, v):
     return df
 
 def analyze_signals(df, sym):
-    """v10: ETH 1H | STRONG(P20<.10+VR>1.5 or RSI<15)2x | REG(P20<.15+VR>1.0 AND RSI<35)1x | skip bad hours"""
+    """v11: ETH 1H | STRONG2x | REG: downtrend2x/uptrend1x | bad hour filter | bootstrap 98.7% sig"""
     try:
         c, h, l, o, v = df["close"], df["high"], df["low"], df["open"], df["volume"]
         if len(c) < 40: return [], 0, 0, 0, 0, 0, ""
@@ -81,28 +81,26 @@ def analyze_signals(df, sym):
         if coin in LAST_SIGNAL and (now-LAST_SIGNAL[coin]).total_seconds()<COOLDOWN_MINUTES*60:
             return [], lc, lr7, vr, current_ts, coin, trend
         
-        # Daily loss limit: stop after -10u
         today=now.strftime("%Y-%m-%d")
         if DAILY_PNL.get(today,0) <= -10:
             return [], lc, lr7, vr, current_ts, coin, "HALT"
         
-        # Consecutive loss pause
         if CONSEC_LOSS >= 4 and CRASH_HALT.get("pause"):
             if now < CRASH_HALT["pause"]:
                 return [], lc, lr7, vr, current_ts, coin, "PAUSE"
         
-        # Bad hour filter (02, 13, 22 UTC = low WR hours)
         hour_utc = now.hour
         if hour_utc in (2, 13, 22):
             return [], lc, lr7, vr, current_ts, coin, "BADHR"
         
         alerts=[]
-        # STRONG (2x): extreme oversold bounce
+        # STRONG (2x): extreme oversold
         if (lp<0.10 and vr>1.5) or lr7<15:
-            alerts.append(("SIG2","LONG",f"STRONG P20={lp:.2f} V={vr:.1f}x R7={lr7:.0f}"))
-        # REG (1x): oversold + dual confirmation
-        elif (lp<0.15 and vr>1.0) and lr7<35:
-            alerts.append(("SIG","LONG",f"P20={lp:.2f} V={vr:.1f}x R7={lr7:.0f}"))
+            alerts.append(("SIG2","LONG",f"STRONG P20={lp:.2f} V={vr:.1f}x R7={lr7:.0f} {trend}"))
+        # REG: downtrend→2x, uptrend→1x (trend contrarian: mean reversion stronger in DT)
+        elif (lp<0.15 and vr>1.0) and lr7<40:
+            sz_tag = "SIG2" if trend=="DN" else "SIG"
+            alerts.append((sz_tag,"LONG",f"P20={lp:.2f} V={vr:.1f}x R7={lr7:.0f} {trend}"))
         
         return alerts, lc, lr7, vr, current_ts, coin, trend
     except Exception as e:
@@ -166,7 +164,7 @@ def ws_connect():
     return ws, t
 
 def main():
-    log.info("v10 ETH-1H STRONG+REG dual badhr start")
+    log.info("v11 ETH-1H trend-contrarian start")
     trade_df = load_trade_log()
     total=len(trade_df); w=(trade_df["result"]=="WIN").sum() if total else 0; tp=trade_df["pnl"].sum() if total else 0
     if total: log.info("history: %d %.1f%% PnL%+d", total, w/total*100, tp)
@@ -179,10 +177,10 @@ def main():
     
     if HAS_WS:
         ws, ws_t = ws_connect()
-        push_wechat("Monitor v10 ETH-1H (WebSocket)", f"BTC+ETH\nReal-time WS\nHistory:{total} trades PnL{tp:+d}u")
+        push_wechat("Monitor v11 ETH-1H (WebSocket)", f"BTC+ETH\nReal-time WS\nHistory:{total} trades PnL{tp:+d}u")
     else:
         log.warning("No websocket-client")
-        push_wechat("Monitor v10 ETH-1H (REST)", f"BTC+ETH\nREST mode\nHistory:{total} trades PnL{tp:+d}u")
+        push_wechat("Monitor v11 ETH-1H (REST)", f"BTC+ETH\nREST mode\nHistory:{total} trades PnL{tp:+d}u")
     
     while True:
         try:
