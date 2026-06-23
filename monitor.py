@@ -15,7 +15,7 @@ CONTRACT_CANDLES = 1; COOLDOWN_MINUTES = 60
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
-SEEN = set(); PENDING = {}; LAST_SIGNAL = {}; DAILY_PNL = {}; CRASH_HALT = {}
+SEEN = set(); PENDING = {}; LAST_SIGNAL = {}; DAILY_PNL = {}; CRASH_HALT = {}; CONSEC_LOSS = 0
 DATA_LOCK = threading.Lock(); latest_data = {}; ws_queue = queue.Queue()
 
 def load_trade_log():
@@ -67,7 +67,7 @@ def update_candle(df, candle_ts, o, h, l, c, v):
     return df
 
 def analyze_signals(df, sym):
-    """v9: ETH 1H | STRONG(P20<.10+VR>1.5 or RSI<15)2x | REG(P20<.15+VR>1.0 or RSI<20)1x"""
+    """v10: ETH 1H | STRONG(P20<.10+VR>1.5 or RSI<15)2x | REG(P20<.15+VR>1.0 AND RSI<35)1x | skip bad hours"""
     try:
         c, h, l, o, v = df["close"], df["high"], df["low"], df["open"], df["volume"]
         if len(c) < 40: return [], 0, 0, 0, 0, 0, ""
@@ -86,12 +86,22 @@ def analyze_signals(df, sym):
         if DAILY_PNL.get(today,0) <= -10:
             return [], lc, lr7, vr, current_ts, coin, "HALT"
         
+        # Consecutive loss pause
+        if CONSEC_LOSS >= 4 and CRASH_HALT.get("pause"):
+            if now < CRASH_HALT["pause"]:
+                return [], lc, lr7, vr, current_ts, coin, "PAUSE"
+        
+        # Bad hour filter (02, 13, 22 UTC = low WR hours)
+        hour_utc = now.hour
+        if hour_utc in (2, 13, 22):
+            return [], lc, lr7, vr, current_ts, coin, "BADHR"
+        
         alerts=[]
-        # Strong (2x): extreme oversold
+        # STRONG (2x): extreme oversold bounce
         if (lp<0.10 and vr>1.5) or lr7<15:
             alerts.append(("SIG2","LONG",f"STRONG P20={lp:.2f} V={vr:.1f}x R7={lr7:.0f}"))
-        # Regular (1x): oversold
-        elif (lp<0.15 and vr>1.0) or lr7<20:
+        # REG (1x): oversold + dual confirmation
+        elif (lp<0.15 and vr>1.0) and lr7<35:
             alerts.append(("SIG","LONG",f"P20={lp:.2f} V={vr:.1f}x R7={lr7:.0f}"))
         
         return alerts, lc, lr7, vr, current_ts, coin, trend
@@ -126,6 +136,9 @@ def settle_trades(dfs):
             parts.append(f"{'+' if r['result']=='WIN' else '-'} {r['coin']} {r['direction']} [{r['rule']}] {r['pnl']:+d}u")
             tp+=r["pnl"]
         for _,r in completed: update_daily_pnl(r["pnl"])
+        if r["result"]=="WIN": CONSEC_LOSS=0
+        else: CONSEC_LOSS+=1
+        if CONSEC_LOSS>=4: CRASH_HALT["pause"]=datetime.now()+timedelta(hours=4)
         push_wechat(f"Settle x{len(completed)} PnL{tp:+d}u","\n".join(parts)+f"\n\nTotal:{tp:+d}u\n{now_str}")
     return [v for _,v in completed]
 
@@ -153,7 +166,7 @@ def ws_connect():
     return ws, t
 
 def main():
-    log.info("v9 ETH-1H P20+RSI+2x start")
+    log.info("v10 ETH-1H STRONG+REG dual badhr start")
     trade_df = load_trade_log()
     total=len(trade_df); w=(trade_df["result"]=="WIN").sum() if total else 0; tp=trade_df["pnl"].sum() if total else 0
     if total: log.info("history: %d %.1f%% PnL%+d", total, w/total*100, tp)
@@ -166,10 +179,10 @@ def main():
     
     if HAS_WS:
         ws, ws_t = ws_connect()
-        push_wechat("Monitor v9 ETH-1H (WebSocket)", f"BTC+ETH\nReal-time WS\nHistory:{total} trades PnL{tp:+d}u")
+        push_wechat("Monitor v10 ETH-1H (WebSocket)", f"BTC+ETH\nReal-time WS\nHistory:{total} trades PnL{tp:+d}u")
     else:
         log.warning("No websocket-client")
-        push_wechat("Monitor v9 ETH-1H (REST)", f"BTC+ETH\nREST mode\nHistory:{total} trades PnL{tp:+d}u")
+        push_wechat("Monitor v10 ETH-1H (REST)", f"BTC+ETH\nREST mode\nHistory:{total} trades PnL{tp:+d}u")
     
     while True:
         try:
