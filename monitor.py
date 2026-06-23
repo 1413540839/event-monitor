@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
-"""v22 - REST polling monitor, WebSocket-free, GitHub Actions stable
-   v21 params +25% wider: 24.1/d WR=55.7% +50u/mo"""
+"""v23 - Skip uptrend signals + FG double bet + REST polling
+   ETH: P20<0.12 RSI7<22 VR20>1.8 Stoch<18 ms=2.0 2x@3+
+   BTC: P20<0.18 RSI7<15 VR20>0.9 Stoch<10 ms=2.0 2x@3+
+   FILTER: skip uptrend (price>EMA200 & EMA20>EMA50)
+   SIZING: FG<25 = 2x bet | Score>=3 = 2x bet
+   Backtest: 18.6/d WR=56.7% +209u/mo"""
 import time, json, requests, os, logging, sys, traceback, subprocess
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -22,6 +26,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger(__name__)
 SEEN = set(); PENDING = {}; CONSEC_LOSS = 0; LAST_SIGNAL = {}
 MAX_RUN_MIN = 350
+FG_VALUE = 50  # cached fear & greed, default neutral
 
 def push_wechat(title, content):
     if not SENDKEY: return False
@@ -47,6 +52,17 @@ def save_trade_log(df):
         if r.returncode == 0 or "nothing to commit" in (r.stdout or ""):
             subprocess.run(["git","push"], capture_output=True, text=True, timeout=30)
     except: pass
+
+def fetch_fear_greed():
+    """Fetch latest Fear & Greed index"""
+    global FG_VALUE
+    try:
+        r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=10)
+        data = r.json().get("data", [{}])[0]
+        FG_VALUE = int(data.get("value", 50))
+        log.info("Fear&Greed: %d (%s)", FG_VALUE, data.get("value_classification",""))
+    except Exception as e:
+        log.warning("FG fetch failed: %s", e)
 
 def fetch_candles(sym):
     url = "https://www.okx.com/api/v5/market/candles"
@@ -81,16 +97,21 @@ def compute_score(df, params):
     lc = c.iloc[-2]; lr7 = rsi7.iloc[-2]
     lp20 = p20.iloc[-2]; lvr = vr20.iloc[-2]; lsk = stoch_k.iloc[-2]
     if pd.isna(lr7) or pd.isna(lp20): return None
+    # Trend check: uptrend = price > EMA200 AND EMA20 > EMA50
+    ema20 = ta.ema(c, 20).iloc[-2]; ema50 = ta.ema(c, 60).iloc[-2]
+    ema200 = ta.ema(c, 200).iloc[-2]
+    is_uptrend = not pd.isna(ema200) and lc > ema200 and not pd.isna(ema20) and not pd.isna(ema50) and ema20 > ema50
+    
     score = 0.0; p = params
     if lp20 < p["p20"]: score += 1
     if lr7 < p["rsi7"]: score += 1
     if lvr > p["vr20"]: score += 1
     if not pd.isna(lsk) and lsk < p["stoch"]: score += 1
-    ema20 = ta.ema(c, 20).iloc[-2]; ema60 = ta.ema(c, 60).iloc[-2]
-    trend = "BULL" if not pd.isna(ema20) and not pd.isna(ema60) and ema20 > ema60 else "BEAR"
+    
+    trend = "UP" if is_uptrend else "DN"
     return {"score": score, "close": lc, "rsi7": lr7, "p20": lp20, "vr": lvr,
             "stoch": lsk if not pd.isna(lsk) else 50, "trend": trend,
-            "ema20": ema20, "ema60": ema60, "ts": df.index[-2]}
+            "is_uptrend": is_uptrend, "ts": df.index[-2], "ema200": ema200}
 
 def classify_signal(sc, params):
     p = params; rules = []
@@ -98,9 +119,7 @@ def classify_signal(sc, params):
     if sc["rsi7"] < p["rsi7"]: rules.append("RSI")
     if sc["vr"] > p["vr20"]: rules.append("VR")
     if sc["stoch"] < p["stoch"]: rules.append("SK")
-    rule_str = "+".join(rules)
-    direction = "LONG"
-    return rule_str, direction
+    return "+".join(rules), "LONG"
 
 def check_settlements(dfs_current):
     results = []; to_remove = []
@@ -113,7 +132,7 @@ def check_settlements(dfs_current):
         exit_price = float(df["close"].loc[df.index[df.index <= latest_closed_ts].max()])
         entry_price = float(trade["entry_price"])
         is_win = exit_price > entry_price
-        multiplier = 2 if trade.get("score", 0) >= 3 else 1
+        multiplier = trade.get("mult", 1)
         pnl = 4 * multiplier if is_win else -5 * multiplier
         result = "WIN" if is_win else "LOSS"
         results.append({
@@ -143,11 +162,12 @@ def run():
         w = (trade_df["result"] == "WIN").sum()
         log.info("History: %d trades %.1f%% PnL%+d", n, w/n*100, tp)
     
+    fetch_fear_greed()
     push_wechat(
-        "Monitor v22 Started",
-        f"BTC+ETH 15m\n+25% params\nHistory:{n}t PnL{tp:+d}u\n{datetime.now().strftime('%H:%M')}"
+        "Monitor v23 Started",
+        f"BTC+ETH 15m\nSkip uptrend + FG double\nFG:{FG_VALUE}\nHistory:{n}t PnL{tp:+d}u\n{datetime.now().strftime('%H:%M')}"
     )
-    log.info("v22 REST polling - %s %s", BAR, SYMBOLS)
+    log.info("v23 REST polling - %s %s | FG=%d", BAR, SYMBOLS, FG_VALUE)
     
     dfs = {}
     for sym in SYMBOLS:
@@ -158,11 +178,17 @@ def run():
     if not dfs:
         log.critical("No data loaded"); return
     
-    loop = 0
+    loop = 0; fg_loop = 0
     while True:
         try:
             if (datetime.now() - start_time).total_seconds() > MAX_RUN_MIN * 60:
                 log.info("Max runtime reached"); break
+            
+            # Refresh FG every 60 loops (~30 min)
+            fg_loop += 1
+            if fg_loop >= 60:
+                fetch_fear_greed()
+                fg_loop = 0
             
             for sym in SYMBOLS:
                 rows = fetch_candles(sym)
@@ -187,25 +213,52 @@ def run():
                 
                 cid = f"{sym}_{sc['ts']}"
                 if sc["score"] >= p["min_s"] and cid not in SEEN:
+                    # Skip uptrend signals
+                    if sc["is_uptrend"]:
+                        log.info("SKIP %s: uptrend (score=%.1f)", coin, sc["score"])
+                        status.append(f"{coin}${sc['close']:,.0f} UP SKIP S{sc['score']:.1f}")
+                        # Still mark as seen to avoid repeated logs
+                        SEEN.add(cid)
+                        continue
+                    
                     rule_str, direction = classify_signal(sc, p)
-                    detail = f"P20={sc['p20']:.3f} R7={sc['rsi7']:.0f} VR={sc['vr']:.2f} SK={sc['stoch']:.0f}"
+                    # Determine multiplier
+                    base_mult = 2 if sc["score"] >= 3 else 1
+                    fg_mult = 2 if FG_VALUE < 25 else 1
+                    total_mult = base_mult * fg_mult
+                    
+                    detail = f"P20={sc['p20']:.3f} R7={sc['rsi7']:.0f} VR={sc['vr']:.2f} SK={sc['stoch']:.0f} FG={FG_VALUE}"
                     SEEN.add(cid)
                     if len(SEEN) > 1000: SEEN.clear()
                     LAST_SIGNAL[coin] = datetime.now()
                     PENDING[(sym, sc["ts"])] = {
                         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "coin": coin, "direction": direction, "rule": rule_str,
-                        "entry_price": sc["close"], "detail": detail, "score": sc["score"]
+                        "entry_price": sc["close"], "detail": detail,
+                        "score": sc["score"], "mult": total_mult
                     }
-                    log.info("SIGNAL %s %s [%s] @$%.2f", coin, direction, rule_str, sc["close"])
+                    
+                    tags = []
+                    if base_mult >= 2: tags.append("2x")
+                    if fg_mult >= 2: tags.append("FG2x")
+                    tag_str = " ".join(tags)
+                    log.info("SIGNAL %s %s [%s] @$%.2f mult=%dx FG=%d",
+                            coin, direction, rule_str, sc["close"], total_mult, FG_VALUE)
                     push_wechat(
-                        f"SIGNAL {coin} {direction} [{rule_str}]",
-                        f"Coin:{coin}\nRule:{rule_str}\nEntry:${sc['close']:,.2f}\n{detail}\nScore:{sc['score']:.1f}/4"
+                        f"SIGNAL {coin} {direction} [{rule_str}] {tag_str}",
+                        f"Coin:{coin}\nRule:{rule_str}\nEntry:${sc['close']:,.2f}\n"
+                        f"{detail}\nBet:{total_mult}x\nScore:{sc['score']:.1f}/4\n"
+                        f"{datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')}"
                     )
                 
-                status.append(f"{coin}${sc['close']:,.0f} R{sc['rsi7']:.0f} V{sc['vr']:.1f} S{sc['score']:.1f}")
+                cd_tag = ""
+                if coin in LAST_SIGNAL:
+                    sec_ago = (datetime.now() - LAST_SIGNAL[coin]).total_seconds()
+                    if sec_ago < 120:
+                        cd_tag = f" CD{int((120-sec_ago)/60)}m"
+                status.append(f"{coin}${sc['close']:,.0f} {sc['trend']} R{sc['rsi7']:.0f} V{sc['vr']:.1f} S{sc['score']:.1f}{cd_tag}")
             
-            print(f"[{bj}] {' | '.join(status)} | pend:{len(PENDING)} sig:{len(SEEN)} L{loop}")
+            print(f"[{bj}] FG:{FG_VALUE} | {' | '.join(status)} | pend:{len(PENDING)} sigs:{len(SEEN)} L{loop}")
             loop += 1
             time.sleep(POLL_SEC)
         except KeyboardInterrupt: break
