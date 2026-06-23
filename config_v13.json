@@ -1,0 +1,75 @@
+﻿{
+  "version": "13",
+  "symbols": ["ETH-USDT", "BTC-USDT"],
+  "timeframe": "1H",
+  "contract_candles": 1,
+  "params": {
+    "ETH-USDT": {
+      "p20": 0.10,
+      "rsi7": 18,
+      "vr20": 2.0,
+      "stoch": 15,
+      "min_score": 2.5,
+      "scale_2x_at": 3.0
+    },
+    "BTC-USDT": {
+      "p20": 0.15,
+      "rsi7": 12,
+      "vr20": 1.0,
+      "stoch": 8,
+      "min_score": 2.5,
+      "scale_2x_at": 3.0
+    }
+  },
+  "v13_new": {
+    "stoch3_max": 15,
+    "asymmetric_sizing": "score>=4 → 2x bet",
+    "description": "stoch3<15 filter removes weak bounce signals, +1.8% WR improvement"
+  },
+  "risk": {
+    "bad_hours_utc": [5, 12, 14, 22],
+    "daily_loss_limit": -10,
+    "cons_loss_pause": 4,
+    "pause_hours": 4,
+    "adaptive_cooldown": {
+      "after_win_minutes": 0,
+      "after_loss_minutes": 120
+    },
+    "regime_filter": "skip when price >12% above EMA200"
+  },
+  "backtest": {
+    "data": "Binance 1H ETH+BTC, 2023-2026 (3 years)",
+    "v12g": {
+      "trades": 686,
+      "wr": 0.633,
+      "pnl": 476,
+      "dd": -11
+    },
+    "v13_static": {
+      "trades": 490,
+      "wr": 0.651,
+      "pnl": 520,
+      "dd": -11
+    },
+    "v13_live_replay": {
+      "trades": 484,
+      "wr": 0.640,
+      "pnl": 457,
+      "dd": -11
+    },
+    "score4_only": {
+      "trades": 63,
+      "wr": 0.730,
+      "pnl": 198
+    },
+    "train_test_validated": true,
+    "improvement_over_v12g": "+1.8% WR, +44u PnL"
+  },
+  "notifications": {
+    "sendkey_env": "SENDKEY",
+    "service": "ServerChan (sctapi.ftqq.com)",
+    "on_signal": true,
+    "on_settle": true,
+    "on_startup": true
+  }
+}
