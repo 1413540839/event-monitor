@@ -7,11 +7,11 @@ import numpy as np, pandas as pd, pandas_ta_classic as ta
 try: import websocket; HAS_WS = True
 except ImportError: HAS_WS = False; log = logging.getLogger(__name__)
 
-SYMBOLS = ["BTC-USDT", "ETH-USDT"]
-BAR = "5m"; LIMIT = 300
+SYMBOLS = ["ETH-USDT"]
+BAR = "1H"; LIMIT = 200
 SENDKEY = os.environ.get("SENDKEY", "")
 TRADE_LOG = Path("trade_log.csv")
-CONTRACT_CANDLES = 2; COOLDOWN_MINUTES = 30
+CONTRACT_CANDLES = 1; COOLDOWN_MINUTES = 60
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
@@ -67,38 +67,33 @@ def update_candle(df, candle_ts, o, h, l, c, v):
     return df
 
 def analyze_signals(df, sym):
-    """v8: v7 signal + crash circuit breaker + daily loss limit | backtest 67.7% WR"""
+    """v9: ETH 1H | STRONG(P20<.10+VR>1.5 or RSI<15)2x | REG(P20<.15+VR>1.0 or RSI<20)1x"""
     try:
         c, h, l, o, v = df["close"], df["high"], df["low"], df["open"], df["volume"]
-        if len(c) < 60: return [], 0, 0, 0, 0, 0, ""
+        if len(c) < 40: return [], 0, 0, 0, 0, 0, ""
         ema20=ta.ema(c,20); ema60=ta.ema(c,60); rsi7=ta.rsi(c,7)
         lc=c.iloc[-1]; lr7=rsi7.iloc[-1]
         pos20=(c-l.rolling(20).min())/(h.rolling(20).max()-l.rolling(20).min()+1e-10); lp=pos20.iloc[-1]
         vol_sma=v.rolling(20).mean(); vr=v.iloc[-1]/vol_sma.iloc[-1] if vol_sma.iloc[-1]>0 else 0
         trend="UP" if ema20.iloc[-1]>ema60.iloc[-1] else "DN"
-        current_ts=int(df.index[-1]); coin="BTC" if "BTC" in sym else "ETH"
+        current_ts=int(df.index[-1]); coin="ETH"
         now=datetime.now()
         if coin in LAST_SIGNAL and (now-LAST_SIGNAL[coin]).total_seconds()<COOLDOWN_MINUTES*60:
             return [], lc, lr7, vr, current_ts, coin, trend
         
-        # Daily loss limit: stop trading after -10u
+        # Daily loss limit: stop after -10u
         today=now.strftime("%Y-%m-%d")
-        daily_loss=DAILY_PNL.get(today,0)
-        if daily_loss <= -10:
+        if DAILY_PNL.get(today,0) <= -10:
             return [], lc, lr7, vr, current_ts, coin, "HALT"
         
-        # Slow crash circuit breaker: DD from 1h high > 0.8% + 5+ bearish candles
-        hh_1h=h.rolling(12).max().iloc[-1]/lc-1 if len(h)>=12 else 0
-        bear_6=int(((c<o).astype(int).rolling(6).sum()).iloc[-1]) if len(c)>=6 else 0
-        if (hh_1h>0.008 and bear_6>=5):
-            CRASH_HALT[(sym,now.date())]=now+timedelta(hours=1)
-        if (sym,now.date()) in CRASH_HALT and now<CRASH_HALT[(sym,now.date())]:
-            return [], lc, lr7, vr, current_ts, coin, "CRASH"
-        
         alerts=[]
-        # v7 signal: P20 extreme oversold + volume confirmation
-        if not pd.isna(lp) and lp<0.15 and vr>1.3:
-            alerts.append(("HC7","LONG",f"P20={lp:.2f} V={vr:.1f}x DD={hh_1h*100:.1f}%"))
+        # Strong (2x): extreme oversold
+        if (lp<0.10 and vr>1.5) or lr7<15:
+            alerts.append(("SIG2","LONG",f"STRONG P20={lp:.2f} V={vr:.1f}x R7={lr7:.0f}"))
+        # Regular (1x): oversold
+        elif (lp<0.15 and vr>1.0) or lr7<20:
+            alerts.append(("SIG","LONG",f"P20={lp:.2f} V={vr:.1f}x R7={lr7:.0f}"))
+        
         return alerts, lc, lr7, vr, current_ts, coin, trend
     except Exception as e:
         log.error("analyze %s: %s", sym, e)
@@ -152,13 +147,13 @@ def ws_connect():
     t = threading.Thread(target=lambda: ws.run_forever(), daemon=True)
     t.start()
     time.sleep(1)
-    channels = [{"channel": "candle5m", "instId": s} for s in SYMBOLS]
+    channels = [{"channel": "candle1H", "instId": s} for s in SYMBOLS]
     ws.send(json.dumps({"op": "subscribe", "args": channels}))
     log.info("WS live: %s", SYMBOLS)
     return ws, t
 
 def main():
-    log.info("v8 P20+VR+CB+DL start")
+    log.info("v9 ETH-1H P20+RSI+2x start")
     trade_df = load_trade_log()
     total=len(trade_df); w=(trade_df["result"]=="WIN").sum() if total else 0; tp=trade_df["pnl"].sum() if total else 0
     if total: log.info("history: %d %.1f%% PnL%+d", total, w/total*100, tp)
@@ -171,10 +166,10 @@ def main():
     
     if HAS_WS:
         ws, ws_t = ws_connect()
-        push_wechat("Monitor v8 P20+VR+CircuitBreaker (WebSocket)", f"BTC+ETH\nReal-time WS\nHistory:{total} trades PnL{tp:+d}u")
+        push_wechat("Monitor v9 ETH-1H (WebSocket)", f"BTC+ETH\nReal-time WS\nHistory:{total} trades PnL{tp:+d}u")
     else:
         log.warning("No websocket-client")
-        push_wechat("Monitor v8 P20+VR+CircuitBreaker (REST)", f"BTC+ETH\nREST mode\nHistory:{total} trades PnL{tp:+d}u")
+        push_wechat("Monitor v9 ETH-1H (REST)", f"BTC+ETH\nREST mode\nHistory:{total} trades PnL{tp:+d}u")
     
     while True:
         try:
