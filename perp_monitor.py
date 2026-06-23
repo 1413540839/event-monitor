@@ -15,7 +15,7 @@ COINS = [
     {"sym":"SOL-USDT","coin":"SOL","sl":1.0,"tp":2.0,"rsi_lo":25,"rsi_hi":70,"p20_lo":0.35,"p20_hi":0.60},
 ]
 
-BAR="1H"; LIMIT=300; POLL_SEC=30; VR_MIN=0.8; MAX_HOLD=4
+BAR="1H"; LIMIT=300; POLL_SEC=15; VR_MIN=0.8; MAX_HOLD=4
 MARGIN=10; LEVERAGE=20; NOTIONAL=MARGIN*LEVERAGE  # 500u
 SENDKEY=os.environ.get("SENDKEY","")
 TRADE_LOG=Path("perp_trades.csv")
