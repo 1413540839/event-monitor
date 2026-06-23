@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Perpetual Futures Monitor v4 - High Yield: 10u x50lev, wide params, multi-coin
+"""Perpetual Futures Monitor v5 - Moderate: 10u x50lev, wide params, multi-coin
    BTC(0.7/1.5) ETH(1.0/1.5) SOL(1.0/2.0) | RSI<25/75 P20<0.35/0.65
    Backtest: ~15/d +146u/mo (30u deployed, ~480% monthly)"""
 import time, json, requests, os, logging, sys, traceback, subprocess
@@ -16,7 +16,7 @@ COINS = [
 ]
 
 BAR="1H"; LIMIT=300; POLL_SEC=30; VR_MIN=0.8; MAX_HOLD=4
-MARGIN=10; LEVERAGE=50; NOTIONAL=MARGIN*LEVERAGE  # 500u
+MARGIN=10; LEVERAGE=20; NOTIONAL=MARGIN*LEVERAGE  # 500u
 SENDKEY=os.environ.get("SENDKEY","")
 TRADE_LOG=Path("perp_trades.csv")
 
@@ -150,7 +150,7 @@ def run():
         f"历史:{n}笔 累计{TOTAL_PNL:+.1f}u\n"
         f"{datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d %H:%M')}"
     )
-    log.info("Perp v4 - %s | %du x%d = %du", coin_list, MARGIN, LEVERAGE, NOTIONAL)
+    log.info("Perp v5 - %s | %du x%d = %du", coin_list, MARGIN, LEVERAGE, NOTIONAL)
     
     dfs={}
     for cfg in COINS:
