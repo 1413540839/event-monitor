@@ -11,7 +11,7 @@ try: import pandas_ta_classic as ta
 except: import pandas_ta as ta
 
 SYMBOLS = ["ETH-USDT", "BTC-USDT"]
-BAR = "15m"; LIMIT = 200; POLL_SEC = 30
+BAR = "15m"; LIMIT = 200; POLL_SEC = 15
 SENDKEY = os.environ.get("SENDKEY", "")
 TRADE_LOG = Path("trade_log.csv")
 
