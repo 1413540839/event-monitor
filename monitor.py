@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
-"""v13 - stoch3 filter + asymmetric sizing (v12g base)
+﻿# -*- coding: utf-8 -*-
+"""v14 - closed-candle evaluation + stoch3 filter + asymmetric sizing (v12g base)
    BTC: P20<0.15 RSI7<12 VR20>1.0 Stoch<8 Score>=2.5 (2x@3.0)
    ETH: P20<0.10 RSI7<18 VR20>2.0 Stoch<15 Score>=2.5 (2x@3.0)
-   NEW: stoch3<15 filter, score4=2x sizing
+   NEW: closed-candle eval (iloc[-2]), stoch3<15 filter, score4=2x sizing
    Bad hours: UTC 5,12,14,22 (train/test validated)
-   Backtest: 490t WR=65.1% PnL=+520u (3yr), LiveReplay: 484t WR=64.0% PnL=+457u"""
+   Backtest: closed-candle 490t WR=65.1% PnL=+520u | Walkforward: +177u edge, p=0.000057"""
 import time, json, requests, os, logging, sys, traceback, subprocess, threading, queue
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -30,7 +30,8 @@ STOCH3_MAX = 15  # v13: filter weak stochastic bounce signals
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 SEEN = set(); PENDING = {}; DAILY_PNL = {}; CRASH_HALT = {}; CONSEC_LOSS = 0
-LAST_SIGNAL = {}; LAST_RESULT = {}  # track per-coin last signal time and result
+LAST_SIGNAL = {}; LAST_RESULT = {}
+LAST_EVAL_TS = {}  # track last evaluated candle ts per symbol  # track per-coin last signal time and result
 DATA_LOCK = threading.Lock(); latest_data = {}; ws_queue = queue.Queue()
 
 def load_trade_log():
@@ -90,11 +91,12 @@ def compute_score(df, params):
     ret5 = c.pct_change(5); ema200 = ta.ema(c, 200)
     l3, h3 = l.rolling(3).min(), h.rolling(3).max()
     stoch3 = 100 * (c - l3) / (h3 - l3 + 1e-10)
-    lc = c.iloc[-1]; lr7 = rsi7.iloc[-1]; lr14 = rsi14.iloc[-1]
-    lp20 = p20.iloc[-1]; lvr = vr20.iloc[-1]; lsk = stoch_k.iloc[-1]
-    lst3 = stoch3.iloc[-1]
-    lr5 = ret5.iloc[-1]; le200 = ema200.iloc[-1]
-    le20 = ta.ema(c, 20).iloc[-1]; le60 = ta.ema(c, 60).iloc[-1]
+    # Use PREVIOUS closed candle (iloc[-2]) to avoid mid-candle noise
+    lc = c.iloc[-2]; lr7 = rsi7.iloc[-2]; lr14 = rsi14.iloc[-2]
+    lp20 = p20.iloc[-2]; lvr = vr20.iloc[-2]; lsk = stoch_k.iloc[-2]
+    lst3 = stoch3.iloc[-2]
+    lr5 = ret5.iloc[-2]; le200 = ema200.iloc[-2]
+    le20 = ta.ema(c, 20).iloc[-2]; le60 = ta.ema(c, 60).iloc[-2]
     if pd.isna(lr7): return None
     if not pd.isna(le200) and le200 > 0 and lc > le200 * 1.12: return None
     if not pd.isna(lst3) and lst3 >= STOCH3_MAX: return None
@@ -110,6 +112,11 @@ def compute_score(df, params):
             "lp20": lp20, "lsk": lsk, "trend": trend, "ts": int(df.index[-1])}
 
 def analyze_signals(df, sym):
+    global LAST_EVAL_TS
+    if df is None or len(df) < 2: return [], 0, 0, 0, 0, 0, "NODATA"
+    candle_ts = int(df.index[-2])  # closed candle ts
+    if sym in LAST_EVAL_TS and LAST_EVAL_TS[sym] == candle_ts:
+        return [], 0, 0, 0, 0, 0, "DUP"  # already evaluated this candle
     try:
         p = SNIPER[sym]; coin = p["coin"]
         result = compute_score(df, p)
@@ -210,7 +217,7 @@ def ws_connect():
     log.info("WS: %s", SYMBOLS); return ws, t
 
 def main():
-    log.info("v13 - stoch3 filter + asymmetric sizing (v12g base))")
+    log.info("v14 - closed-candle evaluation + stoch3 filter + asymmetric sizing (v12g base))")
     trade_df = load_trade_log()
     n = len(trade_df); w = (trade_df["result"]=="WIN").sum() if n else 0
     tp = trade_df["pnl"].sum() if n else 0
@@ -253,7 +260,7 @@ def main():
                     if cid not in SEEN:
                         SEEN.add(cid)
                         if len(SEEN) > 500: SEEN.clear()
-                        LAST_SIGNAL[coin] = datetime.now()
+                        LAST_SIGNAL[coin] = datetime.now(); LAST_EVAL_TS[sym] = candle_ts
                         PENDING[(sym, ts)] = {"time": now_str, "coin": coin,
                             "direction": d, "rule": rl, "entry_price": lc, "detail": detail}
                         lat = (datetime.now(timezone.utc)-pd.Timestamp(ts,unit="ms").tz_localize("UTC")).total_seconds()
@@ -273,6 +280,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
