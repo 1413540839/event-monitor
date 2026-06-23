@@ -3,7 +3,7 @@
    ETH: P20<0.12 RSI7<22 VR20>1.8 Stoch<18 ms=2.0
    BTC: P20<0.18 RSI7<15 VR20>0.9 Stoch<10 ms=2.0
    Backtest: 18.6/d WR=56.7% +269u/mo (200u account, 5u/contract)"""
-import time, json, requests, os, logging, sys, traceback, subprocess
+import time, json, random, requests, os, logging, sys, traceback, subprocess
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import pandas as pd
@@ -44,6 +44,7 @@ def load_trade_log():
 def save_trade_log(df):
     df.to_csv(TRADE_LOG, index=False, encoding="utf-8")
     try:
+        time.sleep(random.uniform(1, 5))  # avoid git conflict with perp monitor
         subprocess.run(["git","pull","--rebase"], capture_output=True, timeout=15)
         subprocess.run(["git","add","trade_log.csv"], capture_output=True, timeout=10)
         r = subprocess.run(["git","commit","-m","update trade log"], capture_output=True, text=True, timeout=10)
@@ -176,6 +177,22 @@ def run():
         if rows: dfs[sym] = build_df(rows)
         else: log.error("No data for %s", sym)
     
+    
+    # Recover pending trades from crash
+    pending_file = Path("pending_trades.json")
+    if pending_file.exists():
+        try:
+            with open(pending_file) as pf:
+                saved = json.load(pf)
+            for pt in saved:
+                key = (pt["sym"], pt["ts"])
+                if key not in PENDING:
+                    PENDING[key] = {"coin":pt["coin"],"direction":pt["direction"],
+                        "entry_price":pt["entry_price"],"mult":pt.get("mult",1),
+                        "detail":pt.get("detail",""),"time":pt.get("time","")}
+            log.info("Recovered %d pending trades", len(saved))
+        except: pass
+
     if not dfs:
         log.critical("No data loaded"); return
     
@@ -233,6 +250,16 @@ def run():
                         "entry_price": sc["close"], "detail": detail,
                         "score": sc["score"], "mult": total_mult
                     }
+                    # Save open trade immediately for crash recovery
+                    # Persist pending trade for crash recovery
+                    try:
+                        pending_json = []
+                        for k,v in PENDING.items():
+                            pending_json.append({"sym":k[0],"ts":k[1],"coin":v["coin"],"direction":v["direction"],
+                                "entry_price":v["entry_price"],"mult":v.get("mult",1),"detail":v.get("detail","")})
+                        with open("pending_trades.json","w") as pf:
+                            json.dump(pending_json, pf)
+                    except: pass
                     
                     tags = []
                     if score_mult >= 2: tags.append(f"S{score_mult}x")

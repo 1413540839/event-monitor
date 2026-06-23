@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Perpetual Futures Monitor v6 - Per-Coin Optimized: 10u x50lev, wide params, multi-coin
+"""Perpetual Futures Monitor v6 - Per-Coin Optimized: 10u x20lev, wide params, multi-coin
    BTC(0.7/1.5) ETH(1.0/1.5) SOL(1.0/2.0) | RSI<25/75 P20<0.35/0.65
-   Backtest: ~15/d +146u/mo (30u deployed, ~480% monthly)"""
-import time, json, requests, os, logging, sys, traceback, subprocess
+   Backtest: ~16.5/d +75u/mo (30u deployed, ~250% monthly)"""
+import time, json, random, requests, os, logging, sys, traceback, subprocess
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import pandas as pd
@@ -16,7 +16,7 @@ COINS = [
 ]
 
 BAR="1H"; LIMIT=300; POLL_SEC=15; VR_MIN=0.8; MAX_HOLD=4
-MARGIN=10; LEVERAGE=20; NOTIONAL=MARGIN*LEVERAGE  # 500u
+MARGIN=10; LEVERAGE=20; NOTIONAL=MARGIN*LEVERAGE  # 200u
 SENDKEY=os.environ.get("SENDKEY","")
 TRADE_LOG=Path("perp_trades.csv")
 
@@ -40,6 +40,7 @@ def load_trades():
 def save_trades(df):
     df.to_csv(TRADE_LOG, index=False, encoding="utf-8")
     try:
+        time.sleep(random.uniform(1, 5))  # avoid git conflict
         subprocess.run(["git","pull","--rebase"], capture_output=True, timeout=15)
         subprocess.run(["git","add","perp_trades.csv"], capture_output=True, timeout=10)
         r=subprocess.run(["git","commit","-m","update perp trades"], capture_output=True, text=True, timeout=10)
@@ -157,6 +158,21 @@ def run():
         rows=fetch_candles(cfg["sym"])
         if rows: dfs[cfg["sym"]]=build_df(rows)
         else: log.error("No data for %s", cfg["coin"])
+    
+    # Recover pending trades
+    pf = Path("perp_pending.json")
+    if pf.exists():
+        try:
+            with open(pf) as fh:
+                saved = json.load(fh)
+            for pt in saved:
+                key = (pt["sym"], pt["ts"])
+                if key not in PENDING:
+                    PENDING[key] = {"coin":pt["coin"],"direction":pt["direction"],
+                        "entry_price":pt["entry_price"],"sl_price":pt["sl_price"],"tp_price":pt["tp_price"]}
+            log.info("Recovered %d pending trades", len(saved))
+        except: pass
+
     if not dfs: return
     
     loop=0
@@ -194,6 +210,16 @@ def run():
                             "coin":coin,"direction":direction,
                             "entry_price":close,"sl_price":sl_p,"tp_price":tp_p
                         }
+                        # Save open trade for crash recovery
+                        # Persist pending for crash recovery
+                        try:
+                            pj=[]
+                            for k,v in PENDING.items():
+                                pj.append({"sym":k[0],"ts":k[1],"coin":v["coin"],"direction":v["direction"],
+                                    "entry_price":v["entry_price"],"sl_price":v["sl_price"],"tp_price":v["tp_price"]})
+                            with open("perp_pending.json","w") as pf:
+                                json.dump(pj,pf)
+                        except: pass
                         risk_u=abs(close-sl_p)/close*NOTIONAL
                         reward_u=abs(tp_p-close)/close*NOTIONAL
                         log.info("SIGNAL %s %s @$%.2f SL=$%.2f TP=$%.2f risk=%.1f reward=%.1f",
