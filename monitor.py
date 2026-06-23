@@ -1,7 +1,7 @@
 ﻿# -*- coding: utf-8 -*-
-"""v20 - 10MIN: v12g params + ms=2.0 + cd=0 + 15m bars
-   BTC: P20<0.15 RSI7<12 VR20>1.0 Stoch<8 Score>=2.5 (2x@3.0)
-   ETH: P20<0.10 RSI7<18 VR20>2.0 Stoch<15 Score>=2.5 (2x@3.0)
+"""v21 - 10MIN: +25% wider params + ms=2.0 + cd=0 + 15m bars (24.1/d WR=55.7% +50u/mo)
+   BTC: P20<0.18 RSI7<15 VR20>0.9 Stoch<10 Score>=2.0 (2x@3.0)
+   ETH: P20<0.12 RSI7<22 VR20>1.8 Stoch<18 Score>=2.0 (2x@3.0)
    v16: min_s=2.0 cd=0(no cooldown) closed-candle stoch3 2x@3+ 655t WR=63.5%
    Bad hours: UTC 5,12,14,22 (train/test validated)
    Backtest: closed-candle 490t WR=65.1% PnL=+520u | Walkforward: +177u edge, p=0.000057"""
@@ -21,8 +21,8 @@ TRADE_LOG = Path("trade_log.csv")
 CONTRACT_CANDLES = 1
 
 SNIPER = {
-    "ETH-USDT": {"p20": 0.10, "rsi7": 18, "vr20": 2.0, "stoch": 15, "min_s": 2.0, "coin": "ETH"},
-    "BTC-USDT": {"p20": 0.15, "rsi7": 12, "vr20": 1.0, "stoch": 8, "min_s": 2.0, "coin": "BTC"},
+    "ETH-USDT": {"p20": 0.12, "rsi7": 22, "vr20": 1.8, "stoch": 18, "min_s": 2.0, "coin": "ETH"},
+    "BTC-USDT": {"p20": 0.18, "rsi7": 15, "vr20": 0.9, "stoch": 10, "min_s": 2.0, "coin": "BTC"},
 }
 
 STOCH3_MAX = 15  # v13: filter weak stochastic bounce signals
