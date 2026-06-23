@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Perpetual Futures Monitor v3 - Multi-coin (BTC/ETH/SOL) + per-coin params
-   10u margin, 20x leverage (200u notional) per trade
-   BTC: SL=0.7% TP=1.5% | ETH: SL=1.0% TP=1.5% | SOL: SL=1.0% TP=2.0%
-   Backtest: ~12/d +39u/mo across 3 coins"""
+"""Perpetual Futures Monitor v4 - High Yield: 10u x50lev, wide params, multi-coin
+   BTC(0.7/1.5) ETH(1.0/1.5) SOL(1.0/2.0) | RSI<25/75 P20<0.35/0.65
+   Backtest: ~15/d +146u/mo (30u deployed, ~480% monthly)"""
 import time, json, requests, os, logging, sys, traceback, subprocess
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -10,15 +9,14 @@ import pandas as pd
 try: import pandas_ta_classic as ta
 except: import pandas_ta as ta
 
-# Coin configs: sym, OKX instId, SL%, TP%, coin name
 COINS = [
-    {"sym": "BTC-USDT", "coin": "BTC", "sl": 0.7, "tp": 1.5, "rsi_lo": 30, "rsi_hi": 70, "p20_lo": 0.30, "p20_hi": 0.70},
-    {"sym": "ETH-USDT", "coin": "ETH", "sl": 1.0, "tp": 1.5, "rsi_lo": 30, "rsi_hi": 70, "p20_lo": 0.30, "p20_hi": 0.70},
-    {"sym": "SOL-USDT", "coin": "SOL", "sl": 1.0, "tp": 2.0, "rsi_lo": 30, "rsi_hi": 70, "p20_lo": 0.30, "p20_hi": 0.70},
+    {"sym":"BTC-USDT","coin":"BTC","sl":0.7,"tp":1.5,"rsi_lo":25,"rsi_hi":75,"p20_lo":0.35,"p20_hi":0.65},
+    {"sym":"ETH-USDT","coin":"ETH","sl":1.0,"tp":1.5,"rsi_lo":25,"rsi_hi":75,"p20_lo":0.35,"p20_hi":0.65},
+    {"sym":"SOL-USDT","coin":"SOL","sl":1.0,"tp":2.0,"rsi_lo":25,"rsi_hi":75,"p20_lo":0.35,"p20_hi":0.65},
 ]
 
-BAR="1H"; LIMIT=300; POLL_SEC=30; VR_MIN=1.0; MAX_HOLD=4
-MARGIN=10; LEVERAGE=20; NOTIONAL=MARGIN*LEVERAGE
+BAR="1H"; LIMIT=300; POLL_SEC=30; VR_MIN=0.8; MAX_HOLD=4
+MARGIN=10; LEVERAGE=50; NOTIONAL=MARGIN*LEVERAGE  # 500u
 SENDKEY=os.environ.get("SENDKEY","")
 TRADE_LOG=Path("perp_trades.csv")
 
@@ -124,11 +122,11 @@ def check_exits(dfs_current):
         emoji="[WIN]" if is_win else "[LOSS]"
         push_wechat(
             f"{emoji} {coin} {dir_str} {actual_pnl:+.1f}u ({exit_reason})",
-            f"币种: {coin}\n方向: {dir_str}\n"
-            f"入场: ${entry:,.2f}\n"
-            f"止损: ${sl_price:,.2f} | 止盈: ${tp_price:,.2f}\n"
-            f"出场: ${exit_price:,.2f}\n"
-            f"盈亏: {actual_pnl:+.1f}u | 累计: {TOTAL_PNL:+.1f}u\n"
+            f"币种:{coin} 方向:{dir_str}\n"
+            f"入场:${entry:,.2f}\n"
+            f"止损:${sl_price:,.2f} 止盈:${tp_price:,.2f}\n"
+            f"出场:${exit_price:,.2f} 盈亏:{actual_pnl:+.1f}u\n"
+            f"累计: {TOTAL_PNL:+.1f}u | {LEVERAGE}x\n"
             f"{datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d %H:%M')}"
         )
     for k in to_remove: del PENDING[k]
@@ -146,12 +144,13 @@ def run():
     
     coin_list=",".join(c["coin"] for c in COINS)
     push_wechat(
-        f"永续合约 v3 启动 ({coin_list})",
-        f"币种: {coin_list}\n周期: 1H | 保证金: {MARGIN}u/笔\n"
-        f"历史: {n}笔 累计{TOTAL_PNL:+.1f}u\n"
-        f"{datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')}"
+        f"永续合约 v4 启动 ({coin_list})",
+        f"币种:{coin_list} 周期:1H\n"
+        f"保证金:{MARGIN}u 杠杆:{LEVERAGE}x 名义:{NOTIONAL}u\n"
+        f"历史:{n}笔 累计{TOTAL_PNL:+.1f}u\n"
+        f"{datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d %H:%M')}"
     )
-    log.info("Perp v3 - %s | %du %dx", coin_list, MARGIN, LEVERAGE)
+    log.info("Perp v4 - %s | %du x%d = %du", coin_list, MARGIN, LEVERAGE, NOTIONAL)
     
     dfs={}
     for cfg in COINS:
@@ -164,7 +163,6 @@ def run():
     while True:
         try:
             if (datetime.now()-start_time).total_seconds()>MAX_RUN*60: break
-            
             for cfg in COINS:
                 rows=fetch_candles(cfg["sym"])
                 if rows: dfs[cfg["sym"]]=build_df(rows)
@@ -172,52 +170,48 @@ def run():
             new_recs=check_exits(dfs)
             if new_recs:
                 ndf=pd.DataFrame(new_recs)
-                trade_df=pd.concat([trade_df, ndf], ignore_index=True)
+                trade_df=pd.concat([trade_df,ndf],ignore_index=True)
                 save_trades(trade_df)
             
-            bj=(datetime.now(timezone.utc)+timedelta(hours=8)).strftime("%H:%M:%S")
+            bj=(datetime.now(timezone.utc)+timedelta(hours=8)).strftime("%H:%M")
             status=[]
             for cfg in COINS:
                 sym=cfg["sym"]; coin=cfg["coin"]
                 if sym not in dfs or len(dfs[sym])<80: continue
                 direction,sc=compute_signal(dfs[sym],cfg)
-                
                 if sc:
                     close=sc["close"]; cid=f"{sym}_{sc['ts']}"
                     if direction!=0 and cid not in SEEN:
                         if coin in LAST_SIGNAL:
-                            if (datetime.now()-LAST_SIGNAL[coin]).total_seconds()<7200:
-                                status.append(f"{coin}${close:,.0f} CD"); continue
-                        
+                            if (datetime.now()-LAST_SIGNAL[coin]).total_seconds()<7200: continue
                         dir_str="LONG" if direction==1 else "SHORT"
                         sl_p=close*(1-cfg["sl"]/100) if direction==1 else close*(1+cfg["sl"]/100)
                         tp_p=close*(1+cfg["tp"]/100) if direction==1 else close*(1-cfg["tp"]/100)
-                        
                         SEEN.add(cid)
                         if len(SEEN)>2000: SEEN.clear()
                         LAST_SIGNAL[coin]=datetime.now()
-                        
                         PENDING[(sym,sc["ts"])]={
                             "coin":coin,"direction":direction,
                             "entry_price":close,"sl_price":sl_p,"tp_price":tp_p
                         }
-                        
-                        log.info("SIGNAL %s %s @$%.2f SL=$%.2f TP=$%.2f", coin,dir_str,close,sl_p,tp_p)
+                        risk_u=abs(close-sl_p)/close*NOTIONAL
+                        reward_u=abs(tp_p-close)/close*NOTIONAL
+                        log.info("SIGNAL %s %s @$%.2f SL=$%.2f TP=$%.2f risk=%.1f reward=%.1f",
+                                coin,dir_str,close,sl_p,tp_p,risk_u,reward_u)
                         push_wechat(
                             f"开仓 {coin} {dir_str} @${close:,.0f}",
-                            f"币种: {coin}\n方向: {dir_str}\n"
-                            f"入场价: ${close:,.2f}\n"
-                            f"止损价: ${sl_p:,.2f} (-{cfg['sl']}%)\n"
-                            f"止盈价: ${tp_p:,.2f} (+{cfg['tp']}%)\n"
+                            f"币种:{coin} 方向:{dir_str}\n"
+                            f"入场:${close:,.2f}\n"
+                            f"止损:${sl_p:,.2f}(-{cfg['sl']}%) 止盈:${tp_p:,.2f}(+{cfg['tp']}%)\n"
+                            f"风险:{risk_u:.0f}u 收益:{reward_u:.0f}u\n"
                             f"RSI7={sc['rsi']:.0f} P20={sc['p20']:.3f} VR={sc['vr']:.2f}\n"
-                            f"{datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d %H:%M')}"
+                            f"{LEVERAGE}x | {datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d %H:%M')}"
                         )
-                    status.append(f"{coin}${close:,.0f} R{sc['rsi']:.0f}")
+                    status.append(f"{coin}${close:,.0f}")
                 else:
                     cv=dfs[sym]["close"].iloc[-2]
-                    status.append(f"{coin}${cv:,.0f} -")
-            
-            print(f"[{bj}] {' | '.join(status)} | pend:{len(PENDING)} PnL:{TOTAL_PNL:+.1f} L{loop}")
+                    status.append(f"{coin}${cv:,.0f}")
+            print(f"[{bj}] {'|'.join(status)} | pend:{len(PENDING)} PnL:{TOTAL_PNL:+.1f} L{loop}")
             loop+=1
             time.sleep(POLL_SEC)
         except KeyboardInterrupt: break
