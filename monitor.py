@@ -1,5 +1,5 @@
 ﻿# -*- coding: utf-8 -*-
-"""v19 - HYPER: ultra-wide + noBH + cd=0 + no stoch3 + no regime + 2x@3+
+"""v20 - 10MIN: v12g params + ms=2.0 + cd=0 + 15m bars
    BTC: P20<0.15 RSI7<12 VR20>1.0 Stoch<8 Score>=2.5 (2x@3.0)
    ETH: P20<0.10 RSI7<18 VR20>2.0 Stoch<15 Score>=2.5 (2x@3.0)
    v16: min_s=2.0 cd=0(no cooldown) closed-candle stoch3 2x@3+ 655t WR=63.5%
@@ -15,14 +15,14 @@ try: import websocket; HAS_WS = True
 except ImportError: HAS_WS = False
 
 SYMBOLS = ["ETH-USDT", "BTC-USDT"]
-BAR = "1H"; LIMIT = 200
+BAR = "15m"; LIMIT = 200
 SENDKEY = os.environ.get("SENDKEY", "")
 TRADE_LOG = Path("trade_log.csv")
 CONTRACT_CANDLES = 1
 
 SNIPER = {
-    "ETH-USDT": {"p20": 0.30, "rsi7": 30, "vr20": 0.8, "stoch": 30, "min_s": 2.0, "coin": "ETH"},
-    "BTC-USDT": {"p20": 0.35, "rsi7": 22, "vr20": 0.4, "stoch": 20, "min_s": 2.0, "coin": "BTC"},
+    "ETH-USDT": {"p20": 0.10, "rsi7": 18, "vr20": 2.0, "stoch": 15, "min_s": 2.0, "coin": "ETH"},
+    "BTC-USDT": {"p20": 0.15, "rsi7": 12, "vr20": 1.0, "stoch": 8, "min_s": 2.0, "coin": "BTC"},
 }
 
 STOCH3_MAX = 15  # v13: filter weak stochastic bounce signals
@@ -217,7 +217,7 @@ def ws_connect():
     log.info("WS: %s", SYMBOLS); return ws, t
 
 def main():
-    log.info("v19 - HYPER: ultra-wide + noBH + cd=0 + no stoch3 + no regime + 2x@3+)")
+    log.info("v20 - 10MIN: v12g params + ms=2.0 + cd=0 + 15m bars)")
     trade_df = load_trade_log()
     n = len(trade_df); w = (trade_df["result"]=="WIN").sum() if n else 0
     tp = trade_df["pnl"].sum() if n else 0
