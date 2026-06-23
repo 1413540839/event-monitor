@@ -124,8 +124,8 @@ def analyze_signals(df, sym):
         score = result["score"]; lc = result["lc"]; lr7 = result["lr7"]; lst3 = result.get("stoch3", 0); lst3 = result.get("stoch3", 0)
         lvr = result["lvr"]; ts = result["ts"]; trend = result["trend"]
         now = datetime.now(); today = now.strftime("%Y-%m-%d")
-        if DAILY_PNL.get(today, 0) <= -10: return [], lc, lr7, lvr, ts, coin, "HALT"
-        if CONSEC_LOSS >= 4 and CRASH_HALT.get("pause") and now < CRASH_HALT["pause"]:
+        if DAILY_PNL.get(today, 0) <= -30: return [], lc, lr7, lvr, ts, coin, "HALT"
+        if CONSEC_LOSS >= 7 and CRASH_HALT.get("pause") and now < CRASH_HALT["pause"]:
             return [], lc, lr7, lvr, ts, coin, "PAUSE"
         # bad hours disabled for max signals
 
@@ -192,7 +192,7 @@ def settle_trades(dfs):
             tp += r["pnl"]; update_daily_pnl(r["pnl"])
             if r["result"] == "WIN": CONSEC_LOSS = 0
             else: CONSEC_LOSS += 1
-        if CONSEC_LOSS >= 4: CRASH_HALT["pause"] = datetime.now() + timedelta(hours=4)
+        if CONSEC_LOSS >= 4: CRASH_HALT["pause"] = datetime.now() + timedelta(hours=2)
         push_wechat(f"\u7ed3\u7b97 {len(completed)}\u7b14 PnL{tp:+d}u",
                    "\n".join(parts) + f"\n\n\u603b:{tp:+d}u\n{now_str}")
     return completed
