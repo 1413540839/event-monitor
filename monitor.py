@@ -1,5 +1,5 @@
 ﻿# -*- coding: utf-8 -*-
-"""v16 - MAX signals: min_s=2.0 cd=0 closed-candle stoch3 2x@3+
+"""v17 - ULTRA: wide thresholds + no bad hours + cd=0 + stoch3 + 2x@3+
    BTC: P20<0.15 RSI7<12 VR20>1.0 Stoch<8 Score>=2.5 (2x@3.0)
    ETH: P20<0.10 RSI7<18 VR20>2.0 Stoch<15 Score>=2.5 (2x@3.0)
    v16: min_s=2.0 cd=0(no cooldown) closed-candle stoch3 2x@3+ 655t WR=63.5%
@@ -21,8 +21,8 @@ TRADE_LOG = Path("trade_log.csv")
 CONTRACT_CANDLES = 1
 
 SNIPER = {
-    "ETH-USDT": {"p20": 0.10, "rsi7": 18, "vr20": 2.0, "stoch": 15, "min_s": 2.0, "coin": "ETH"},
-    "BTC-USDT": {"p20": 0.15, "rsi7": 12, "vr20": 1.0, "stoch": 8,  "min_s": 2.0, "coin": "BTC"},
+    "ETH-USDT": {"p20": 0.20, "rsi7": 25, "vr20": 1.2, "stoch": 22, "min_s": 2.0, "coin": "ETH"},
+    "BTC-USDT": {"p20": 0.25, "rsi7": 18, "vr20": 0.6, "stoch": 15, "min_s": 2.0, "coin": "BTC"},
 }
 
 STOCH3_MAX = 15  # v13: filter weak stochastic bounce signals
@@ -127,7 +127,7 @@ def analyze_signals(df, sym):
         if DAILY_PNL.get(today, 0) <= -10: return [], lc, lr7, lvr, ts, coin, "HALT"
         if CONSEC_LOSS >= 4 and CRASH_HALT.get("pause") and now < CRASH_HALT["pause"]:
             return [], lc, lr7, lvr, ts, coin, "PAUSE"
-        if now.hour in (5, 12, 14, 22): return [], lc, lr7, lvr, ts, coin, "BADHR"
+        # bad hours disabled for max signals
 
         # Adaptive cooldown
         cd_minutes = 0   # no cooldown
@@ -217,7 +217,7 @@ def ws_connect():
     log.info("WS: %s", SYMBOLS); return ws, t
 
 def main():
-    log.info("v16 - MAX signals: min_s=2.0 cd=0 closed-candle stoch3 2x@3+)")
+    log.info("v17 - ULTRA: wide thresholds + no bad hours + cd=0 + stoch3 + 2x@3+)")
     trade_df = load_trade_log()
     n = len(trade_df); w = (trade_df["result"]=="WIN").sum() if n else 0
     tp = trade_df["pnl"].sum() if n else 0
