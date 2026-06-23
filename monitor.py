@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""BTC/ETH 事件合约 24h监控 v2.3 — 结算前置 + 独立异常处理"""
+"""BTC/ETH 事件合约 24h监控 v3 — 冷却+批量结算+安静模式"""
 import time, requests, os, logging, sys, traceback, subprocess
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -7,15 +7,16 @@ import numpy as np, pandas as pd, pandas_ta_classic as ta
 
 SYMBOLS = ["BTC-USDT", "ETH-USDT"]
 BAR = "5m"; LIMIT = 200; POLL = 30
-SENDKEY = os.environ.get("SENDKEY", "SCT368411TN5CPulBnZ7HuuE1GKx6D9bvu")
+SENDKEY = os.environ.get("SENDKEY", "")
 TRADE_LOG = Path("trade_log.csv")
 CONTRACT_CANDLES = 2
-TEST_MODE = os.environ.get("TEST_MODE", "0") == "1"
+COOLDOWN_MINUTES = 30  # 同币种信号冷却时间
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 SEEN = set()
 PENDING = {}
+LAST_SIGNAL = {}  # coin -> datetime of last signal
 
 def load_trade_log():
     if TRADE_LOG.exists(): return pd.read_csv(TRADE_LOG)
@@ -30,6 +31,7 @@ def save_trade_log(df):
     except: pass
 
 def push_wechat(title, content):
+    if not SENDKEY: return False
     try:
         r = requests.post(f"https://sctapi.ftqq.com/{SENDKEY}.send", data={"title":title,"desp":content}, timeout=15)
         return r.status_code == 200
@@ -47,21 +49,15 @@ def fetch_df(sym):
     return df.sort_index()
 
 def settle_all(dfs):
-    """独立结算检查 — 遍历所有PENDING，不依赖信号计算"""
     completed = []
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
     for key, trade in list(PENDING.items()):
         t_sym, t_entry_ts = key
         if t_sym not in dfs: continue
         df = dfs[t_sym]
-        if t_entry_ts not in df.index:
-            log.info("结算跳过: %s ts=%d 数据中无此K线", trade["coin"], t_entry_ts)
-            continue
-        
+        if t_entry_ts not in df.index: continue
         current_ts = int(df.index[-1])
         bars = df.index.get_loc(current_ts) - df.index.get_loc(t_entry_ts)
-        
         if bars >= CONTRACT_CANDLES:
             current_price = float(df.loc[current_ts, "close"])
             win = (current_price > trade["entry_price"]) if trade["direction"] == "看涨" else (current_price < trade["entry_price"])
@@ -70,22 +66,24 @@ def settle_all(dfs):
                    "rule": trade["rule"], "entry_price": trade["entry_price"],
                    "exit_price": current_price, "pnl": pnl, "result": "赢" if win else "输", "detail": trade["detail"]}
             completed.append((key, rec))
-            
-            emoji = "OK" if win else "NO"
-            log.info(">>> 结算: %s %s [%s] %s %+du 入场$%.2f 出场$%.2f bars=%d",
+            log.info("结算: %s %s [%s] %s %+du 入场$%.2f 出场$%.2f bars=%d",
                      trade["coin"], trade["direction"], trade["rule"], "赢" if win else "输", pnl,
                      trade["entry_price"], current_price, bars)
-            push_wechat(
-                f"[结算] {trade['coin']} {'赢' if win else '输'} {pnl:+d}u",
-                f"{emoji} {trade['direction']} [{trade['rule']}]\n入场: ${trade['entry_price']:,.2f}\n出场: ${current_price:,.2f}\n盈亏: {pnl:+d}u\n时间: {now_str}"
-            )
-    
-    for key in completed:
-        del PENDING[key]
+    # 批量推送结算
+    if completed:
+        parts = []
+        total_pnl = 0
+        for _, rec in completed:
+            emoji = "OK" if rec["result"] == "赢" else "NO"
+            parts.append(f"{emoji} {rec['coin']} {rec['direction']} [{rec['rule']}] {rec['result']} {rec['pnl']:+d}u")
+            total_pnl += rec["pnl"]
+        body = "\n".join(parts) + f"\n\n累计盈亏: {total_pnl:+d}u\n{now_str}"
+        title = f"[结算] {len(completed)}笔 累计{total_pnl:+d}u"
+        push_wechat(title, body)
+    for key, _ in completed: del PENDING[key]
     return [v for _, v in completed]
 
-def detect_signals(df, sym, test_sent):
-    """信号检测 — 独立函数，异常不影响结算"""
+def detect_signals(df, sym):
     try:
         c, h, l, o, v = df["close"], df["high"], df["low"], df["open"], df["volume"]
         ema20=ta.ema(c,20); ema60=ta.ema(c,60); rsi7=ta.rsi(c,7); rsi14=ta.rsi(c,14)
@@ -103,11 +101,13 @@ def detect_signals(df, sym, test_sent):
         current_ts = int(df.index[-1])
         coin="BTC" if "BTC" in sym else "ETH"
         
-        alerts=[]
-        if TEST_MODE and not test_sent and coin == "ETH":
-            alerts.append(("TEST","看涨",f"测试 R7={lr7:.0f} P20={lp:.2f}"))
-            test_sent = True
+        # 冷却检查
+        now = datetime.now()
+        if coin in LAST_SIGNAL:
+            if (now - LAST_SIGNAL[coin]).total_seconds() < COOLDOWN_MINUTES * 60:
+                return [], trend, lc, lr7, vr, current_ts, coin
         
+        alerts=[]
         if not pd.isna(lr7) and lr7<25 and lp<0.2 and lmh>pmh:
             alerts.append(("HC1","看涨",f"极限超卖 R7={lr7:.0f} P20={lp:.2f}"))
         if rsi_div==1 and vr>1.2 and lp<0.4:
@@ -124,17 +124,13 @@ def detect_signals(df, sym, test_sent):
                 alerts.append(("HC3","看涨",f"{'锤子线' if hammer else '看涨吞没'} V={vr:.1f}x"))
             if (star or bere) and lp>0.7 and vr>1.3:
                 alerts.append(("HC5","看跌",f"{'射击星' if star else '看跌吞没'} V={vr:.1f}x"))
-        
-        return alerts, trend, lc, lr7, vr, current_ts, coin, test_sent
+        return alerts, trend, lc, lr7, vr, current_ts, coin
     except Exception as e:
         log.error("信号检测异常 %s: %s", sym, e)
-        return [], "?", 0, 0, 0, 0, sym, test_sent
+        return [], "?", 0, 0, 0, 0, sym
 
 def main():
-    log.info("=" * 40)
-    log.info("启动 v2.3 SYMBOLS=%s TEST=%s PENDING结算独立", SYMBOLS, TEST_MODE)
-    push_wechat("事件合约监控 v2.3 上线" + (" [测试]" if TEST_MODE else ""),
-               f"币种: BTC, ETH\n周期: 10分钟\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    log.info("启动 v3 冷却=%dmin SYMBOLS=%s", COOLDOWN_MINUTES, SYMBOLS)
     
     trade_df = load_trade_log()
     total = len(trade_df)
@@ -142,17 +138,18 @@ def main():
     total_pnl = trade_df["pnl"].sum() if total else 0
     log.info("历史: %d笔 胜率%.1f%% 累计%+du", total, wins_n/total*100 if total else 0, total_pnl)
     
-    test_sent = False
-    loop_count = 0
+    # 启动只推送一次
+    push_wechat("监控上线 v3", f"币种: BTC, ETH\n周期: 10分钟\n冷却: {COOLDOWN_MINUTES}分钟\n累计: {total}笔 {wins_n}赢 PnL{total_pnl:+d}u\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    settlement_batch = []  # 批量收集结算，每分钟推一次
+    last_batch_push = datetime.now()
     
     while True:
         try:
-            loop_count += 1
             bj = (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%H:%M:%S")
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print(f"[{bj}]", end=" ", flush=True)
             
-            # === 第一步: 拉取所有数据 ===
             dfs = {}
             for sym in SYMBOLS:
                 try:
@@ -161,20 +158,22 @@ def main():
                 except Exception as e:
                     log.error("拉取%s失败: %s", sym, e)
             
-            # === 第二步: 独立结算 (不依赖信号检测) ===
+            # 结算
             new_records = settle_all(dfs)
             
-            # === 第三步: 信号检测 ===
+            # 信号检测
             for sym in SYMBOLS:
                 if sym not in dfs: continue
                 df = dfs[sym]
-                alerts, trend, lc, lr7, vr, current_ts, coin, test_sent_flag = detect_signals(df, sym, test_sent)
-                test_sent = test_sent_flag
-                
+                alerts, trend, lc, lr7, vr, current_ts, coin = detect_signals(df, sym)
                 ns = ",".join(rl for rl,_,_ in alerts) if alerts else "-"
                 status = f"{coin}${lc:,.0f} {trend} R7={lr7:.0f} V={vr:.1f}x"
                 if any(k[0]==sym for k in PENDING): status += f" P{sum(1 for k in PENDING if k[0]==sym)}"
-                status += f" [{ns}]"
+                cd = ""
+                if coin in LAST_SIGNAL:
+                    sec = COOLDOWN_MINUTES*60 - (datetime.now() - LAST_SIGNAL[coin]).total_seconds()
+                    if sec > 0: cd = f" CD{int(sec/60)}m"
+                status += f"{cd} [{ns}]"
                 print(status, end="  ", flush=True)
                 
                 for rl,d,detail in alerts:
@@ -182,12 +181,13 @@ def main():
                     if cid not in SEEN:
                         SEEN.add(cid)
                         if len(SEEN)>200: SEEN.clear()
+                        LAST_SIGNAL[coin] = datetime.now()
                         PENDING[(sym, current_ts)] = {"time":now_str,"coin":coin,"direction":d,"rule":rl,"entry_price":lc,"detail":detail}
-                        log.info(">>> 开仓: %s %s [%s] @ $%.2f PND=%d", coin, d, rl, lc, len(PENDING))
-                        push_wechat(f"[开仓] {coin} {d} [{rl}]",
-                                   f"币种: {coin}\n方向: {d}\n规则: {rl}\n详情: {detail}\n入场价: ${lc:,.2f}\n时间: {now_str}\n\n10分钟后结算")
+                        log.info("信号: %s %s [%s] @ $%.2f", coin, d, rl, lc)
+                        push_wechat(f"[信号] {coin} {d} [{rl}]",
+                                   f"币种: {coin}\n方向: {d}\n规则: {rl}\n详情: {detail}\n入场价: ${lc:,.2f}\n时间: {now_str}")
             
-            # 保存新结算
+            # 保存
             if new_records:
                 new_df = pd.DataFrame(new_records)
                 trade_df = pd.concat([trade_df, new_df], ignore_index=True)
@@ -195,14 +195,12 @@ def main():
                 total_n = len(trade_df)
                 w = (trade_df["result"]=="赢").sum()
                 pnl = trade_df["pnl"].sum()
-                msg = f"结算: {len(new_records)}笔 | 累计: {total_n}笔 {w}赢 {w/total_n*100:.1f}% {pnl:+d}u"
-                log.info(msg)
-                print(f"\n  {msg}", end="")
+                print(f"\n  结算{len(new_records)}笔 | 累计{total_n}笔 {w}赢 {w/total_n*100:.1f}% {pnl:+d}u", end="")
             
             print(f"  >{POLL}s")
             time.sleep(POLL)
         except Exception as e:
-            log.error("主循环异常 #%d: %s", loop_count, traceback.format_exc())
+            log.error("异常: %s", traceback.format_exc())
             time.sleep(10)
 
 if __name__=="__main__":
