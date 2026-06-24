@@ -1,0 +1,2 @@
+time,coin,direction,entry_price,sl_price,tp_price,exit_price,pnl,result,exit_reason
+2026-06-24 11:49:40,SOL,LONG,69.05,68.3595,70.431,70.431,4.0,WIN,TP
