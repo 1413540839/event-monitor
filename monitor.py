@@ -147,10 +147,10 @@ def check_settlements(dfs_current):
         global CONSEC_LOSS
         if not is_win: CONSEC_LOSS += 1
         else: CONSEC_LOSS = 0
-        emoji = "[WIN]" if is_win else "[LOSS]"
+        result_cn = "赢" if is_win else "输"
         push_wechat(
-            f"{emoji} {trade['coin']} {result} {pnl:+d}u [{trade['rule']}]",
-            f"Coin:{trade['coin']}\nRule:{trade['rule']}\nEntry:${entry_price:,.2f}\nExit:${exit_price:,.2f}\nPnL:{pnl:+d}u\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"{'赚' if is_win else '亏'}了 {trade['coin']} 做多 {pnl:+d}u",
+            f"币种: {trade['coin']} | 做多\n结果: {result_cn}{abs(pnl)}u\n入场: ${entry_price:,.2f} -> 出场: ${exit_price:,.2f}\n信号: {trade['rule']}\n盈亏: {pnl:+d}u\n{datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d %H:%M')}"
         )
     for k in to_remove: del PENDING[k]
     return results
@@ -166,8 +166,8 @@ def run():
     fetch_fear_greed()
     fg_m = get_fg_multiplier(FG_VALUE)
     push_wechat(
-        "Monitor v24 Started",
-        f"BTC+ETH 15m\nSkip uptrend + Tiered FG\nFG:{FG_VALUE} (FG x{fg_m})\nHistory:{n}t PnL{tp:+d}u\n{datetime.now().strftime('%H:%M')}"
+        "事件合约监控 已启动",
+        f"币种: BTC+ETH | 15分钟\n跳过上涨趋势 + 分级恐惧贪婪\n恐惧贪婪: {FG_VALUE} (仓位 x{fg_m})\n历史: {n}笔 累计{tp:+d}u\n{datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d %H:%M')}"
     )
     log.info("v24 REST - %s %s | FG=%d mult=%dx", BAR, SYMBOLS, FG_VALUE, fg_m)
     
@@ -268,11 +268,11 @@ def run():
                     log.info("SIGNAL %s %s [%s] @$%.2f mult=%dx (S:%dx FG:%dx)",
                             coin, direction, rule_str, sc["close"], total_mult, score_mult, fg_mult)
                     push_wechat(
-                        f"SIGNAL {coin} {direction} [{rule_str}] {tag_str}",
-                        f"Coin:{coin}\nRule:{rule_str}\nEntry:${sc['close']:,.2f}\n"
-                        f"{detail}\nContracts:{total_mult}x (S:{score_mult}x FG:{fg_mult}x)\n"
-                        f"Risk:{total_mult*5}u Win:{total_mult*4}u\n"
-                        f"{datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')}"
+                        f"开仓 {coin} 做多 [{rule_str}] {tag_str}",
+                        f"币种: {coin} | 做多\n信号: {rule_str}\n入场: ${sc['close']:,.2f}\n"
+                        f"{detail}\n仓位: {total_mult}张 (信号{score_mult}x 恐惧贪婪{fg_mult}x)\n"
+                        f"风险: {total_mult*5}u | 盈利: {total_mult*4}u\n"
+                        f"{datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d %H:%M')}"
                     )
                 
                 cd_tag = ""
