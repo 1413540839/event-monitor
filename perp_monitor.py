@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Perpetual Futures Monitor v7 - Wide RSI<40/60: 10u x20lev, wide params, multi-coin
-   BTC(0.7/1.5) ETH(1.0/1.5) SOL(1.0/2.0) | RSI<25/75 P20<0.35/0.65
-   Backtest: ~28/d +70u/mo (30u deployed, ~250% monthly)"""
+"""Perpetual Futures Monitor v7 - RSI<40/60 P20<0.45/0.55, 10u x20lev
+   Backtest: ~28/d +70u/mo"""
 import time, json, random, requests, os, logging, sys, traceback, subprocess
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -16,7 +15,7 @@ COINS = [
 ]
 
 BAR="1H"; LIMIT=300; POLL_SEC=15; VR_MIN=0.8; MAX_HOLD=4
-MARGIN=10; LEVERAGE=20; NOTIONAL=MARGIN*LEVERAGE  # 200u
+MARGIN=10; LEVERAGE=20; NOTIONAL=MARGIN*LEVERAGE
 SENDKEY=os.environ.get("SENDKEY","")
 TRADE_LOG=Path("perp_trades.csv")
 
@@ -40,7 +39,7 @@ def load_trades():
 def save_trades(df):
     df.to_csv(TRADE_LOG, index=False, encoding="utf-8")
     try:
-        time.sleep(random.uniform(1, 5))  # avoid git conflict
+        time.sleep(random.uniform(1,5))
         subprocess.run(["git","pull","--rebase"], capture_output=True, timeout=15)
         subprocess.run(["git","add","perp_trades.csv"], capture_output=True, timeout=10)
         r=subprocess.run(["git","commit","-m","update perp trades"], capture_output=True, text=True, timeout=10)
@@ -107,7 +106,9 @@ def check_exits(dfs_current):
         if direction==1: actual_pnl=(exit_price-entry)/entry*NOTIONAL
         else: actual_pnl=(entry-exit_price)/entry*NOTIONAL
         is_win=actual_pnl>0; result="WIN" if is_win else "LOSS"
-        TOTAL_PNL+=actual_pnl; dir_str="LONG" if direction==1 else "SHORT"
+        TOTAL_PNL+=actual_pnl
+        dir_str="LONG" if direction==1 else "SHORT"
+        dir_cn="做多" if direction==1 else "做空"
         coin=trade["coin"]
         CONSEC_LOSS[coin]=CONSEC_LOSS.get(coin,0)+1 if not is_win else 0
         
@@ -120,14 +121,11 @@ def check_exits(dfs_current):
         })
         to_remove.append((sym,entry_ts))
         
-        emoji="[WIN]" if is_win else "[LOSS]"
+        reason_cn={"TP":"止盈","SL":"止损","TIME":"超时"}.get(exit_reason,exit_reason)
         push_wechat(
-            f"{emoji} {coin} {dir_str} {actual_pnl:+.1f}u ({exit_reason})",
-            f"币种:{coin} 方向:{dir_str}\n"
-            f"入场:${entry:,.2f}\n"
-            f"止损:${sl_price:,.2f} 止盈:${tp_price:,.2f}\n"
-            f"出场:${exit_price:,.2f} 盈亏:{actual_pnl:+.1f}u\n"
-            f"累计: {TOTAL_PNL:+.1f}u | {LEVERAGE}x\n"
+            f"{'赚' if is_win else '亏'}了 {coin} {dir_cn} {actual_pnl:+.1f}u",
+            f"{coin} {dir_cn} | {reason_cn}\n入场 ${entry:,.2f} -> 出场 ${exit_price:,.2f}\n"
+            f"本单: {'赚' if is_win else '亏'}{abs(actual_pnl):.1f}u\n累计: {TOTAL_PNL:+.1f}u\n"
             f"{datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d %H:%M')}"
         )
     for k in to_remove: del PENDING[k]
@@ -145,34 +143,31 @@ def run():
     
     coin_list=",".join(c["coin"] for c in COINS)
     push_wechat(
-        f"永续合约 v4 启动 ({coin_list})",
-        f"币种:{coin_list} 周期:1H\n"
-        f"保证金:{MARGIN}u 杠杆:{LEVERAGE}x 名义:{NOTIONAL}u\n"
-        f"历史:{n}笔 累计{TOTAL_PNL:+.1f}u\n"
+        "永续合约 已启动",
+        f"币种: {coin_list}\n保证金: {MARGIN}u | 杠杆: {LEVERAGE}x\n"
+        f"历史: {n}笔 累计{TOTAL_PNL:+.1f}u\n"
         f"{datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d %H:%M')}"
     )
     log.info("Perp v7 - %s | %du x%d = %du", coin_list, MARGIN, LEVERAGE, NOTIONAL)
+    
+    # Recover pending trades
+    pf=Path("perp_pending.json")
+    if pf.exists():
+        try:
+            with open(pf) as fh: saved=json.load(fh)
+            for pt in saved:
+                key=(pt["sym"],pt["ts"])
+                if key not in PENDING:
+                    PENDING[key]={"coin":pt["coin"],"direction":pt["direction"],
+                        "entry_price":pt["entry_price"],"sl_price":pt["sl_price"],"tp_price":pt["tp_price"]}
+            log.info("Recovered %d pending trades", len(saved))
+        except: pass
     
     dfs={}
     for cfg in COINS:
         rows=fetch_candles(cfg["sym"])
         if rows: dfs[cfg["sym"]]=build_df(rows)
         else: log.error("No data for %s", cfg["coin"])
-    
-    # Recover pending trades
-    pf = Path("perp_pending.json")
-    if pf.exists():
-        try:
-            with open(pf) as fh:
-                saved = json.load(fh)
-            for pt in saved:
-                key = (pt["sym"], pt["ts"])
-                if key not in PENDING:
-                    PENDING[key] = {"coin":pt["coin"],"direction":pt["direction"],
-                        "entry_price":pt["entry_price"],"sl_price":pt["sl_price"],"tp_price":pt["tp_price"]}
-            log.info("Recovered %d pending trades", len(saved))
-        except: pass
-
     if not dfs: return
     
     loop=0
@@ -201,6 +196,7 @@ def run():
                         if coin in LAST_SIGNAL:
                             if (datetime.now()-LAST_SIGNAL[coin]).total_seconds()<7200: continue
                         dir_str="LONG" if direction==1 else "SHORT"
+                        dir_cn="做多" if direction==1 else "做空"
                         sl_p=close*(1-cfg["sl"]/100) if direction==1 else close*(1+cfg["sl"]/100)
                         tp_p=close*(1+cfg["tp"]/100) if direction==1 else close*(1-cfg["tp"]/100)
                         SEEN.add(cid)
@@ -210,29 +206,25 @@ def run():
                             "coin":coin,"direction":direction,
                             "entry_price":close,"sl_price":sl_p,"tp_price":tp_p
                         }
-                        # Save open trade for crash recovery
-                        # Persist pending for crash recovery
+                        risk_u=abs(close-sl_p)/close*NOTIONAL
+                        reward_u=abs(tp_p-close)/close*NOTIONAL
+                        log.info("SIGNAL %s %s @$%.2f", coin,dir_str,close)
+                        push_wechat(
+                            f"开仓 {coin} {dir_cn} ${close:,.0f}",
+                            f"{coin} {dir_cn}\n入场: ${close:,.2f}\n"
+                            f"止损: ${sl_p:,.2f} | 止盈: ${tp_p:,.2f}\n"
+                            f"最多亏{risk_u:.0f}u | 最多赚{reward_u:.0f}u\n"
+                            f"RSI={sc['rsi']:.0f} 位置={sc['p20']:.2f} 量={sc['vr']:.1f}x\n"
+                            f"{datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d %H:%M')}"
+                        )
+                        # Persist for crash recovery
                         try:
-                            pj=[]
+                            pj=[]; 
                             for k,v in PENDING.items():
                                 pj.append({"sym":k[0],"ts":k[1],"coin":v["coin"],"direction":v["direction"],
                                     "entry_price":v["entry_price"],"sl_price":v["sl_price"],"tp_price":v["tp_price"]})
-                            with open("perp_pending.json","w") as pf:
-                                json.dump(pj,pf)
+                            with open("perp_pending.json","w") as pf2: json.dump(pj,pf2)
                         except: pass
-                        risk_u=abs(close-sl_p)/close*NOTIONAL
-                        reward_u=abs(tp_p-close)/close*NOTIONAL
-                        log.info("SIGNAL %s %s @$%.2f SL=$%.2f TP=$%.2f risk=%.1f reward=%.1f",
-                                coin,dir_str,close,sl_p,tp_p,risk_u,reward_u)
-                        push_wechat(
-                            f"开仓 {coin} {dir_str} @${close:,.0f}",
-                            f"币种:{coin} 方向:{dir_str}\n"
-                            f"入场:${close:,.2f}\n"
-                            f"止损:${sl_p:,.2f}(-{cfg['sl']}%) 止盈:${tp_p:,.2f}(+{cfg['tp']}%)\n"
-                            f"风险:{risk_u:.0f}u 收益:{reward_u:.0f}u\n"
-                            f"RSI7={sc['rsi']:.0f} P20={sc['p20']:.3f} VR={sc['vr']:.2f}\n"
-                            f"{LEVERAGE}x | {datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d %H:%M')}"
-                        )
                     status.append(f"{coin}${close:,.0f}")
                 else:
                     cv=dfs[sym]["close"].iloc[-2]
