@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Perpetual Futures Monitor v6 - Per-Coin Optimized: 10u x20lev, wide params, multi-coin
+"""Perpetual Futures Monitor v7 - Wide RSI<40/60: 10u x20lev, wide params, multi-coin
    BTC(0.7/1.5) ETH(1.0/1.5) SOL(1.0/2.0) | RSI<25/75 P20<0.35/0.65
-   Backtest: ~16.5/d +75u/mo (30u deployed, ~250% monthly)"""
+   Backtest: ~28/d +70u/mo (30u deployed, ~250% monthly)"""
 import time, json, random, requests, os, logging, sys, traceback, subprocess
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -10,9 +10,9 @@ try: import pandas_ta_classic as ta
 except: import pandas_ta as ta
 
 COINS = [
-    {"sym":"BTC-USDT","coin":"BTC","sl":0.7,"tp":1.5,"rsi_lo":30,"rsi_hi":75,"p20_lo":0.35,"p20_hi":0.65},
-    {"sym":"ETH-USDT","coin":"ETH","sl":1.0,"tp":1.5,"rsi_lo":30,"rsi_hi":70,"p20_lo":0.35,"p20_hi":0.60},
-    {"sym":"SOL-USDT","coin":"SOL","sl":1.0,"tp":2.0,"rsi_lo":25,"rsi_hi":70,"p20_lo":0.35,"p20_hi":0.60},
+    {"sym":"BTC-USDT","coin":"BTC","sl":0.7,"tp":1.5,"rsi_lo":40,"rsi_hi":60,"p20_lo":0.45,"p20_hi":0.55},
+    {"sym":"ETH-USDT","coin":"ETH","sl":1.0,"tp":1.5,"rsi_lo":40,"rsi_hi":60,"p20_lo":0.45,"p20_hi":0.55},
+    {"sym":"SOL-USDT","coin":"SOL","sl":1.0,"tp":2.0,"rsi_lo":40,"rsi_hi":60,"p20_lo":0.45,"p20_hi":0.55},
 ]
 
 BAR="1H"; LIMIT=300; POLL_SEC=15; VR_MIN=0.8; MAX_HOLD=4
@@ -151,7 +151,7 @@ def run():
         f"历史:{n}笔 累计{TOTAL_PNL:+.1f}u\n"
         f"{datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d %H:%M')}"
     )
-    log.info("Perp v6 - %s | %du x%d = %du", coin_list, MARGIN, LEVERAGE, NOTIONAL)
+    log.info("Perp v7 - %s | %du x%d = %du", coin_list, MARGIN, LEVERAGE, NOTIONAL)
     
     dfs={}
     for cfg in COINS:
