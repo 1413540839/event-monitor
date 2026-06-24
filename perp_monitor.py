@@ -123,7 +123,7 @@ def check_exits(dfs_current):
         
         reason_cn={"TP":"止盈","SL":"止损","TIME":"超时"}.get(exit_reason,exit_reason)
         push_wechat(
-            f"{'赚' if is_win else '亏'}了 {coin} {dir_cn} {actual_pnl:+.1f}u",
+            f"【永续】{'赚' if is_win else '亏'}了 {coin} {dir_cn} {actual_pnl:+.1f}u",
             f"{coin} {dir_cn} | {reason_cn}\n入场 ${entry:,.2f} -> 出场 ${exit_price:,.2f}\n"
             f"本单: {'赚' if is_win else '亏'}{abs(actual_pnl):.1f}u\n累计: {TOTAL_PNL:+.1f}u\n"
             f"{datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d %H:%M')}"
@@ -210,7 +210,7 @@ def run():
                         reward_u=abs(tp_p-close)/close*NOTIONAL
                         log.info("SIGNAL %s %s @$%.2f", coin,dir_str,close)
                         push_wechat(
-                            f"开仓 {coin} {dir_cn} ${close:,.0f}",
+                            f"【永续】开仓 {coin} {dir_cn} ${close:,.0f}",
                             f"{coin} {dir_cn}\n入场: ${close:,.2f}\n"
                             f"止损: ${sl_p:,.2f} | 止盈: ${tp_p:,.2f}\n"
                             f"最多亏{risk_u:.0f}u | 最多赚{reward_u:.0f}u\n"

@@ -149,7 +149,7 @@ def check_settlements(dfs_current):
         else: CONSEC_LOSS = 0
         result_cn = "赢" if is_win else "输"
         push_wechat(
-            f"{'赚' if is_win else '亏'}了 {trade['coin']} 做多 {pnl:+d}u",
+            f"【事件】{'赚' if is_win else '亏'}了 {trade['coin']} 做多 {pnl:+d}u",
             f"币种: {trade['coin']} | 做多\n结果: {result_cn}{abs(pnl)}u\n入场: ${entry_price:,.2f} -> 出场: ${exit_price:,.2f}\n信号: {trade['rule']}\n盈亏: {pnl:+d}u\n{datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d %H:%M')}"
         )
     for k in to_remove: del PENDING[k]
@@ -268,7 +268,7 @@ def run():
                     log.info("SIGNAL %s %s [%s] @$%.2f mult=%dx (S:%dx FG:%dx)",
                             coin, direction, rule_str, sc["close"], total_mult, score_mult, fg_mult)
                     push_wechat(
-                        f"开仓 {coin} 做多 [{rule_str}] {tag_str}",
+                        f"【事件】开仓 {coin} 做多 [{rule_str}] {tag_str}",
                         f"币种: {coin} | 做多\n信号: {rule_str}\n入场: ${sc['close']:,.2f}\n"
                         f"{detail}\n仓位: {total_mult}张 (信号{score_mult}x 恐惧贪婪{fg_mult}x)\n"
                         f"风险: {total_mult*5}u | 盈利: {total_mult*4}u\n"
