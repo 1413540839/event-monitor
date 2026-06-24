@@ -15,7 +15,7 @@ COINS = [
     {"sym":"XRP-USDT","coin":"XRP","sl":1.0,"tp":2.0,"rsi_lo":38,"rsi_hi":62,"p20_lo":0.42,"p20_hi":0.58},
     {"sym":"BNB-USDT","coin":"BNB","sl":0.8,"tp":1.8,"rsi_lo":40,"rsi_hi":60,"p20_lo":0.44,"p20_hi":0.56},
     {"sym":"DOGE-USDT","coin":"DOGE","sl":1.5,"tp":3.0,"rsi_lo":35,"rsi_hi":65,"p20_lo":0.40,"p20_hi":0.60},
-    {"sym":"PEPE-USDT","coin":"PEPE","sl":2.0,"tp":4.0,"rsi_lo":35,"rsi_hi":65,"p20_lo":0.40,"p20_hi":0.60},
+    {"sym":"AVAX-USDT","coin":"AVAX","sl":1.5,"tp":3.0,"rsi_lo":38,"rsi_hi":62,"p20_lo":0.42,"p20_hi":0.58},
     {"sym":"LINK-USDT","coin":"LINK","sl":1.2,"tp":2.5,"rsi_lo":38,"rsi_hi":62,"p20_lo":0.42,"p20_hi":0.58},
 ]
 
