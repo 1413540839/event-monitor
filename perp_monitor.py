@@ -12,6 +12,11 @@ COINS = [
     {"sym":"BTC-USDT","coin":"BTC","sl":0.7,"tp":1.5,"rsi_lo":40,"rsi_hi":60,"p20_lo":0.45,"p20_hi":0.55},
     {"sym":"ETH-USDT","coin":"ETH","sl":1.0,"tp":1.5,"rsi_lo":40,"rsi_hi":60,"p20_lo":0.45,"p20_hi":0.55},
     {"sym":"SOL-USDT","coin":"SOL","sl":1.0,"tp":2.0,"rsi_lo":40,"rsi_hi":60,"p20_lo":0.45,"p20_hi":0.55},
+    {"sym":"DOGE-USDT","coin":"DOGE","sl":1.5,"tp":3.0,"rsi_lo":35,"rsi_hi":65,"p20_lo":0.40,"p20_hi":0.60},
+    {"sym":"PEPE-USDT","coin":"PEPE","sl":2.0,"tp":4.0,"rsi_lo":35,"rsi_hi":65,"p20_lo":0.40,"p20_hi":0.60},
+    {"sym":"SUI-USDT","coin":"SUI","sl":1.5,"tp":3.0,"rsi_lo":38,"rsi_hi":62,"p20_lo":0.42,"p20_hi":0.58},
+    {"sym":"WIF-USDT","coin":"WIF","sl":2.0,"tp":4.0,"rsi_lo":35,"rsi_hi":65,"p20_lo":0.40,"p20_hi":0.60},
+    {"sym":"LINK-USDT","coin":"LINK","sl":1.2,"tp":2.5,"rsi_lo":38,"rsi_hi":62,"p20_lo":0.42,"p20_hi":0.58},
 ]
 
 BAR="1H"; LIMIT=300; POLL_SEC=15; VR_MIN=0.8; MAX_HOLD=4
