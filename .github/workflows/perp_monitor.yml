@@ -1,4 +1,4 @@
-name: Perpetual Futures Monitor v1
+﻿name: Perpetual Futures Monitor v2 WS
 
 on:
   schedule:
@@ -21,15 +21,15 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install dependencies
-        run: pip install requests numpy pandas pandas_ta_classic
+        run: pip install requests numpy pandas pandas_ta_classic websocket-client
       - name: Configure Git
         run: |
           git config user.name "PerpMonitorBot"
           git config user.email "bot@perp-monitor.dev"
-      - name: Run Perp Monitor v1
+      - name: Run Perp Monitor v2 WS
         env:
           SENDKEY: ${{ secrets.SENDKEY }}
-        run: python perp_monitor.py
+        run: python perp_monitor_ws.py
       - name: Push trade log
         if: always()
         run: |
