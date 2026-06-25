@@ -1,4 +1,4 @@
-name: Event Contract Monitor v22
+﻿name: Event Contract Monitor v25 WS
 
 on:
   schedule:
@@ -21,15 +21,15 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install dependencies
-        run: pip install requests numpy pandas pandas_ta_classic
+        run: pip install requests numpy pandas pandas_ta_classic websocket-client
       - name: Configure Git
         run: |
           git config user.name "EventMonitorBot"
           git config user.email "bot@event-monitor.dev"
-      - name: Run Monitor v22
+      - name: Run Monitor v25 WS
         env:
           SENDKEY: ${{ secrets.SENDKEY }}
-        run: python monitor.py
+        run: python monitor_ws_v2.py
       - name: Push trade log
         if: always()
         run: |
