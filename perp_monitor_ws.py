@@ -27,11 +27,6 @@ MAX_RUN_MIN=350
 PRICE_SLIPPAGE_MAX=0.005  # skip if ticker > 0.5% away
 
 
-# === DIAGNOSTIC ===
-if SENDKEY:
-    log.info("SENDKEY OK: %s...%s", SENDKEY[:4], SENDKEY[-4:])
-else:
-    log.error("SENDKEY EMPTY! Check GitHub Secrets -> SENDKEY")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log=logging.getLogger(__name__)
@@ -243,6 +238,7 @@ def run():
         f"{datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d %H:%M')}"
     )
     log.info("SENDKEY: %s...", SENDKEY[:8] if SENDKEY else "NONE")
+    log.info("SENDKEY: %s...%s", SENDKEY[:4] if SENDKEY else "NONE", SENDKEY[-4:] if SENDKEY else "NONE")
     log.info("Perp WS v1 - %s | %dux%d=%du", coin_list, MARGIN, LEVERAGE, NOTIONAL)
     
     random.seed()

@@ -25,11 +25,6 @@ FG_VALUE = 50
 PRICE_SLIPPAGE_MAX = 0.008  # skip signal if ticker > 0.8% away from candle close
 
 
-# === DIAGNOSTIC ===
-if SENDKEY:
-    log.info("SENDKEY OK: %s...%s", SENDKEY[:4], SENDKEY[-4:])
-else:
-    log.error("SENDKEY EMPTY! Check GitHub Secrets -> SENDKEY")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
@@ -281,6 +276,7 @@ def run():
         f"币种: BTC+ETH | 15分钟 WebSocket实时\n跳过上涨趋势 + 分级恐惧贪婪\n恐惧贪婪: {FG_VALUE} (仓位 x{fg_m})\n历史: {n}笔 累计{tp:+d}u\n{datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d %H:%M')}"
     )
     log.info("SENDKEY: %s...", SENDKEY[:8] if SENDKEY else "NONE")
+    log.info("SENDKEY: %s...%s", SENDKEY[:4] if SENDKEY else "NONE", SENDKEY[-4:] if SENDKEY else "NONE")
     log.info("WS Monitor v1 started - %s %s | FG=%d", BAR, SYMBOLS, FG_VALUE)
     
     random.seed()
