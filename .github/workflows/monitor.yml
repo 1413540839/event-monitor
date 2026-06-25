@@ -22,18 +22,7 @@ jobs:
           python-version: "3.11"
       - name: Install dependencies
         run: pip install requests numpy pandas pandas_ta_classic websocket-client
-      - name: Configure Git
-        run: |
-          git config user.name "EventMonitorBot"
-          git config user.email "bot@event-monitor.dev"
-      - name: Run Monitor v25 WS
+      - name: Test Push Only
         env:
           SENDKEY: ${{ secrets.SENDKEY }}
-        run: python monitor_ws_v2.py
-      - name: Push trade log
-        if: always()
-        run: |
-          git pull --rebase || true
-          git add trade_log.csv || true
-          git commit -m "auto: trade log update" || true
-          git push || true
+        run: python test_push.py
