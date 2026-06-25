@@ -26,6 +26,13 @@ TRADE_LOG=Path("perp_trades.csv")
 MAX_RUN_MIN=350
 PRICE_SLIPPAGE_MAX=0.005  # skip if ticker > 0.5% away
 
+
+# === DIAGNOSTIC ===
+if SENDKEY:
+    log.info("SENDKEY OK: %s...%s", SENDKEY[:4], SENDKEY[-4:])
+else:
+    log.error("SENDKEY EMPTY! Check GitHub Secrets -> SENDKEY")
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log=logging.getLogger(__name__)
 SEEN=set(); PENDING={}; CONSEC_LOSS={}; LAST_SIGNAL={}; TOTAL_PNL=0.0

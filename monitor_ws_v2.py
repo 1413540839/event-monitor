@@ -24,6 +24,13 @@ SNIPER = {
 FG_VALUE = 50
 PRICE_SLIPPAGE_MAX = 0.008  # skip signal if ticker > 0.8% away from candle close
 
+
+# === DIAGNOSTIC ===
+if SENDKEY:
+    log.info("SENDKEY OK: %s...%s", SENDKEY[:4], SENDKEY[-4:])
+else:
+    log.error("SENDKEY EMPTY! Check GitHub Secrets -> SENDKEY")
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 SEEN = set(); PENDING = {}; LAST_SIGNAL = {}
