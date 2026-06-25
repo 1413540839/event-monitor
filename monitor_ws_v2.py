@@ -13,7 +13,7 @@ SYMBOLS = ["BTC-USDT", "ETH-USDT"]
 BAR = "15m"; LIMIT = 200
 SENDKEY = os.environ.get("SENDKEY", "")
 TRADE_LOG = Path("trade_log.csv")
-CONTRACT_CANDLES = 2  # settle after 2 bars (up to 30min window)
+CONTRACT_MINUTES = 10  # settle 10 minutes after entry
 MAX_RUN_MIN = 350
 
 SNIPER = {
@@ -218,9 +218,10 @@ def check_settlements():
             if sym not in dfs: continue
             df = dfs[sym]
             if entry_ts not in df.index: continue
-            # Count bars since entry
-            bars_passed = len(df) - df.index.get_loc(entry_ts) - 1
-            if bars_passed < CONTRACT_CANDLES: continue
+            # Check if 10 min passed since entry
+            entry_dt = datetime.fromtimestamp(entry_ts / 1000, tz=timezone.utc) if entry_ts > 1e12 else datetime.fromtimestamp(entry_ts, tz=timezone.utc)
+            minutes_passed = (datetime.now(timezone.utc) - entry_dt).total_seconds() / 60
+            if minutes_passed < CONTRACT_MINUTES: continue
             
             current_price = float(df.iloc[-1]["close"])
             entry_price = float(trade["entry_price"])
