@@ -235,6 +235,7 @@ def run():
         f"历史: {n}笔 累计{TOTAL_PNL:+.1f}u\nWebSocket实时数据\n"
         f"{datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d %H:%M')}"
     )
+    log.info("SENDKEY: %s...", SENDKEY[:8] if SENDKEY else "NONE")
     log.info("Perp WS v1 - %s | %dux%d=%du", coin_list, MARGIN, LEVERAGE, NOTIONAL)
     
     random.seed()

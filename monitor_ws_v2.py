@@ -33,11 +33,24 @@ ws_connected = False
 
 # ---- UTILS ----
 def push_wechat(title, content):
-    if not SENDKEY: return False
+    if not SENDKEY:
+        log.error("PUSH: SENDKEY not set")
+        return False
     try:
         r = requests.post(f"https://sctapi.ftqq.com/{SENDKEY}.send", data={"title": title, "desp": content}, timeout=10)
-        return r.status_code == 200
-    except: return False
+        if r.status_code == 200:
+            resp = r.json()
+            if resp.get("code") == 0:
+                log.info("PUSH OK: %s", title[:50])
+                return True
+            else:
+                log.error("PUSH FAIL: %s - %s", r.status_code, resp.get("message", ""))
+                return False
+        log.error("PUSH HTTP %d: %s", r.status_code, title[:50])
+        return False
+    except Exception as e:
+        log.error("PUSH EXCEPTION: %s", e)
+        return False
 
 def load_trade_log():
     if TRADE_LOG.exists(): return pd.read_csv(TRADE_LOG)
@@ -260,6 +273,7 @@ def run():
         "【事件】事件合约监控 已启动 (WS)",
         f"币种: BTC+ETH | 15分钟 WebSocket实时\n跳过上涨趋势 + 分级恐惧贪婪\n恐惧贪婪: {FG_VALUE} (仓位 x{fg_m})\n历史: {n}笔 累计{tp:+d}u\n{datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d %H:%M')}"
     )
+    log.info("SENDKEY: %s...", SENDKEY[:8] if SENDKEY else "NONE")
     log.info("WS Monitor v1 started - %s %s | FG=%d", BAR, SYMBOLS, FG_VALUE)
     
     random.seed()
